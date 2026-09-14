@@ -77,23 +77,29 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
         for meta in self.image_meta:
             key = meta["key"]
             meta["lerobot_key"] = f"observation.images.{key}" if key != "default" else "observation.images"
+            meta["source_keys"] = self._get_source_keys("image", key, meta["lerobot_key"])
             image_stride = self.image_subsample_stride if self.presample_images else 1
-            delta_timestamps[meta["lerobot_key"]] = [
-                (t * global_sample_stride) / fps
-                for t in range(-past_obs_size, -past_obs_size + obs_size, image_stride)
-            ]
+            for source_key in meta["source_keys"]:
+                delta_timestamps[source_key] = [
+                    (t * global_sample_stride) / fps
+                    for t in range(-past_obs_size, -past_obs_size + obs_size, image_stride)
+                ]
         
         for meta in self.state_meta:
             key = meta["key"]
             meta["lerobot_key"] = f"observation.state.{key}" if key != "default" else "observation.state"
-            delta_timestamps[meta["lerobot_key"]] = [
-                (t * global_sample_stride) / fps for t in range(-past_obs_size, -past_obs_size + obs_size)
-            ]
+            meta["source_keys"] = self._get_source_keys("state", key, meta["lerobot_key"])
+            for source_key in meta["source_keys"]:
+                delta_timestamps[source_key] = [
+                    (t * global_sample_stride) / fps for t in range(-past_obs_size, -past_obs_size + obs_size)
+                ]
         
         for meta in self.action_meta:
             key = meta["key"]
             meta["lerobot_key"] = f"action.{key}" if key != "default" else "action"
-            delta_timestamps[meta["lerobot_key"]] = [(t * global_sample_stride) / fps for t in range(-past_action_size, -past_action_size + action_size)]
+            meta["source_keys"] = self._get_source_keys("action", key, meta["lerobot_key"])
+            for source_key in meta["source_keys"]:
+                delta_timestamps[source_key] = [(t * global_sample_stride) / fps for t in range(-past_action_size, -past_action_size + action_size)]
 
         episodes = {}
         if val_set_proportion < 1e-6:
@@ -143,6 +149,19 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
             action = action.unsqueeze(-1)
         assert action.shape[-1] == raw_shape, f"Action '{key}' shape {action.shape[-1]} mismatch with meta {raw_shape}."
         return action
+
+    def _get_source_keys(self, kind: str, key: str, default_key: str) -> list[str]:
+        """Map a logical feature to one or more physical LeRobot columns."""
+        return [default_key]
+
+    def _get_pad_for_meta(self, meta, lerobot_sample, kind: str) -> torch.Tensor:
+        source_keys = meta.get("source_keys", [meta["lerobot_key"]])
+        pad_key = f"{source_keys[0]}_is_pad"
+        if pad_key in lerobot_sample:
+            return lerobot_sample[pad_key]
+        if kind == "image":
+            return torch.zeros(len(lerobot_sample[source_keys[0]]), dtype=torch.bool)
+        raise KeyError(f"Missing padding mask `{pad_key}` for {kind} feature `{meta['key']}`")
 
     def _get_state(self, meta, lerobot_sample) -> torch.Tensor:
         key, lerobot_key, raw_shape = meta["key"], meta["lerobot_key"], meta["raw_shape"]
@@ -235,9 +254,9 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
         for meta in self.image_meta:
             sample["images"][meta["key"]] = self._get_image(meta, lerobot_sample)
 
-        sample["action_is_pad"] = lerobot_sample[f"{self.action_meta[0]['lerobot_key']}_is_pad"]
-        sample["state_is_pad"] = lerobot_sample[f"{self.state_meta[0]['lerobot_key']}_is_pad"]
-        sample["image_is_pad"] = lerobot_sample[f"{self.image_meta[0]['lerobot_key']}_is_pad"]
+        sample["action_is_pad"] = self._get_pad_for_meta(self.action_meta[0], lerobot_sample, "action")
+        sample["state_is_pad"] = self._get_pad_for_meta(self.state_meta[0], lerobot_sample, "state")
+        sample["image_is_pad"] = self._get_pad_for_meta(self.image_meta[0], lerobot_sample, "image")
 
         sample = self._get_additional_data(sample, lerobot_sample)
 

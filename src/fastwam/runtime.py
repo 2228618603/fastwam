@@ -460,8 +460,12 @@ def run_training(cfg: DictConfig):
     )
     misc.register_work_dir(cfg.output_dir)
     config_payload = OmegaConf.to_container(cfg, resolve=True)
-    with open(Path(cfg.output_dir) / "config.yaml", "w") as f:
-        OmegaConf.save(config_payload, f)
+    # All distributed ranks share the output directory; avoid concurrent
+    # writes to the same config file during startup.
+    rank = int(os.environ.get("RANK", "0"))
+    if rank == 0 and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+        with open(Path(cfg.output_dir) / "config.yaml", "w") as f:
+            OmegaConf.save(config_payload, f)
 
     model_device = _resolve_train_device()
     mixed_precision = _normalize_mixed_precision(cfg.mixed_precision)

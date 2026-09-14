@@ -1,8 +1,10 @@
 
 # Misc
 outputs/
-checkpoints
-data/*
+/checkpoints
+/checkpoints/
+/data
+/data/*
 apex/
 assets/
 runs
@@ -30,6 +32,12 @@ tests/
 *.gz
 *.pkl
 *.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.npy
+*.npz
 *.bin
 *.pickle
 *.txt
