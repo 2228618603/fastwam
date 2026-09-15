@@ -1551,3 +1551,54 @@ Final Acceptance:
 [ ] eval mp4 可生成
 [ ] eval 日志包含 val_loss、PSNR/SSIM、action_l1/action_l2
 ```
+
+## 当前长跑配置：8 卡 bs8 100k
+
+本轮长跑使用 8 卡、单卡 batch size 8、不做梯度累积：
+
+```text
+GPUS=0,1,2,3,4,5,6,7
+NUM_PROCESSES=8
+batch_size=8
+global_batch_size=64
+gradient_accumulation_steps=1
+max_steps=100000
+save_every=5000
+eval_every=0
+model.load_text_encoder=false
+data.train.use_text_embed_cache=true
+data.val.use_text_embed_cache=true
+```
+
+一键启动：
+
+```bash
+cd /home/chw/code/packages/FastWAM
+bash load-giga/code/06_start_bs8_8gpu_training_tmux.sh
+```
+
+tmux session：
+
+```text
+fastwam_bs8_8gpu_100k
+```
+
+训练输出：
+
+```text
+/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k
+```
+
+训练日志：
+
+```text
+/mnt/data/chw/fastwam/logs/giga_to_fastwam/agilex_empty_box_giga_init_bs8_8gpu_100k.log
+```
+
+实时曲线：
+
+```text
+/home/chw/code/packages/FastWAM/load-giga/code/live/loss_curve.gif
+/home/chw/code/packages/FastWAM/load-giga/code/live/loss_curve.png
+/home/chw/code/packages/FastWAM/load-giga/code/live/index.html
+```

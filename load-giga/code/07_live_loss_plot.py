@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--interval", type=float, default=10.0)
     parser.add_argument("--gif", action="store_true", help="Also write an animated loss GIF.")
     parser.add_argument("--gif-tail", type=int, default=300, help="Maximum recent train points to animate.")
-    parser.add_argument("--tmux-pane", default="", help="Fallback pane to parse, for example fastwam_bs14_7gpu:train.")
+    parser.add_argument("--tmux-pane", default="", help="Fallback pane to parse, for example fastwam_bs16_8gpu:train.")
     parser.add_argument("--tmux-lines", type=int, default=5000, help="Recent tmux lines to capture when log parsing has no points.")
     parser.add_argument("--once", action="store_true")
     return parser.parse_args()
@@ -40,9 +40,10 @@ def parse_args() -> argparse.Namespace:
 def normalize_log_text(text: str) -> str:
     text = ANSI_RE.sub("", text)
     text = text.replace("\r", "\n")
-    # Narrow tmux panes can wrap decimals as "0.\n6630"; join those before
-    # normal whitespace folding so the metric stays parseable.
+    # Narrow tmux panes can wrap decimals as "0.\n6630" or "2\n.0335";
+    # join those before normal whitespace folding so metrics stay parseable.
     text = re.sub(r"(?<=\d\.)\s+(?=\d)", "", text)
+    text = re.sub(r"(?<=\d)\s+(?=\.\d)", "", text)
     # Rich may wrap long metric names in narrow terminals.
     text = re.sub(r"loss_acti\s+on", "loss_action", text)
     text = re.sub(r"loss_vid\s+eo", "loss_video", text)

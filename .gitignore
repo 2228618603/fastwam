@@ -252,3 +252,8 @@ manifest.json
 wandb/
 onelogger.err
 onelogger.log
+
+# picture
+/load-giga/code/live/
+/load-giga/code/tmux_launch/
+/.vscode/settings.json
