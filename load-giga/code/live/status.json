@@ -1,8 +1,19 @@
 {
   "eval_points": 0,
-  "generated_at": "2026-09-15T07:53:00.913279+00:00",
+  "generated_at": "2026-09-15T08:30:40.367614+00:00",
   "latest_eval": null,
-  "latest_train": null,
-  "log": "/mnt/data/chw/fastwam/logs/giga_to_fastwam/agilex_empty_box_giga_init_bs16_5k.log",
-  "train_points": 0
+  "latest_train": {
+    "epoch": 0,
+    "loss": 0.9109,
+    "loss_action": 0.5242,
+    "loss_video": 0.3867,
+    "lr": 5.38e-06,
+    "max_step": 5000,
+    "samples_per_sec": 12.21,
+    "step": 134,
+    "steps_per_sec": 0.12
+  },
+  "log": "/mnt/data/chw/fastwam/logs/giga_to_fastwam/agilex_empty_box_giga_init_bs14_5k.log",
+  "source": "tmux:fastwam_bs14_7gpu:train",
+  "train_points": 134
 }

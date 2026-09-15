@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import re
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--interval", type=float, default=10.0)
     parser.add_argument("--gif", action="store_true", help="Also write an animated loss GIF.")
     parser.add_argument("--gif-tail", type=int, default=300, help="Maximum recent train points to animate.")
+    parser.add_argument("--tmux-pane", default="", help="Fallback pane to parse, for example fastwam_bs14_7gpu:train.")
+    parser.add_argument("--tmux-lines", type=int, default=5000, help="Recent tmux lines to capture when log parsing has no points.")
     parser.add_argument("--once", action="store_true")
     return parser.parse_args()
 
@@ -37,6 +40,9 @@ def parse_args() -> argparse.Namespace:
 def normalize_log_text(text: str) -> str:
     text = ANSI_RE.sub("", text)
     text = text.replace("\r", "\n")
+    # Narrow tmux panes can wrap decimals as "0.\n6630"; join those before
+    # normal whitespace folding so the metric stays parseable.
+    text = re.sub(r"(?<=\d\.)\s+(?=\d)", "", text)
     # Rich may wrap long metric names in narrow terminals.
     text = re.sub(r"loss_acti\s+on", "loss_action", text)
     text = re.sub(r"loss_vid\s+eo", "loss_video", text)
@@ -47,6 +53,31 @@ def normalize_log_text(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(errors="replace")
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def read_tmux_pane(pane: str, lines: int) -> str:
+    if not pane:
+        return ""
+    try:
+        result = subprocess.run(
+            ["tmux", "capture-pane", "-t", pane, "-p", "-S", f"-{max(int(lines), 1)}"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout
+
+
 def _last_by_step(rows: list[dict]) -> list[dict]:
     by_step = {}
     for row in rows:
@@ -54,10 +85,8 @@ def _last_by_step(rows: list[dict]) -> list[dict]:
     return [by_step[step] for step in sorted(by_step)]
 
 
-def parse_metrics(log_path: Path) -> tuple[list[dict], list[dict]]:
-    if not log_path.exists():
-        return [], []
-    text = normalize_log_text(log_path.read_text(errors="replace"))
+def parse_metrics_from_text(raw_text: str) -> tuple[list[dict], list[dict]]:
+    text = normalize_log_text(raw_text)
     train_rows = []
     train_pattern = re.compile(
         rf"epoch=(?P<epoch>\d+)\s+step=(?P<step>\d+)/(?P<max_step>\d+)\s+"
@@ -105,6 +134,19 @@ def parse_metrics(log_path: Path) -> tuple[list[dict], list[dict]]:
     return _last_by_step(train_rows), _last_by_step(eval_rows)
 
 
+def parse_metrics(log_path: Path, tmux_pane: str = "", tmux_lines: int = 5000) -> tuple[list[dict], list[dict], str]:
+    raw_text = read_text(log_path)
+    train_rows, eval_rows = parse_metrics_from_text(raw_text)
+    source = "log"
+    if not train_rows and tmux_pane:
+        tmux_text = read_tmux_pane(tmux_pane, tmux_lines)
+        tmux_train_rows, tmux_eval_rows = parse_metrics_from_text(tmux_text)
+        if tmux_train_rows or tmux_eval_rows:
+            train_rows, eval_rows = tmux_train_rows, tmux_eval_rows
+            source = f"tmux:{tmux_pane}"
+    return train_rows, eval_rows, source
+
+
 def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", newline="") as f:
@@ -118,7 +160,7 @@ def write_csv(path: Path, rows: list[dict], fields: list[str]) -> None:
 def write_plot(path: Path, train_rows: list[dict], eval_rows: list[dict]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp.png")
     fig, axes = plt.subplots(3, 1, figsize=(11, 10), constrained_layout=True)
-    fig.suptitle("FastWAM AgileX BS16 Training Monitor")
+    fig.suptitle("FastWAM AgileX Training Monitor")
 
     ax = axes[0]
     if train_rows:
@@ -239,6 +281,7 @@ def write_html(path: Path, status: dict) -> None:
     latest = status.get("latest_train") or {}
     latest_eval = status.get("latest_eval") or {}
     generated = status.get("generated_at", "")
+    source = status.get("source", "-")
     html = f"""<!doctype html>
 <html>
 <head>
@@ -257,7 +300,7 @@ def write_html(path: Path, status: dict) -> None:
 </head>
 <body>
   <h1>FastWAM Loss Monitor</h1>
-  <p>Updated: <code>{generated}</code>. This page refreshes every 15 seconds.</p>
+  <p>Updated: <code>{generated}</code>. Source: <code>{source}</code>. This page refreshes every 15 seconds.</p>
   <div class="grid">
     <div class="card"><div class="label">step</div><div class="value">{latest.get("step", "-")}/{latest.get("max_step", "-")}</div></div>
     <div class="card"><div class="label">loss</div><div class="value">{latest.get("loss", "-")}</div></div>
@@ -276,9 +319,16 @@ def write_html(path: Path, status: dict) -> None:
     os.replace(tmp, path)
 
 
-def publish(log_path: Path, out_dir: Path, write_animation: bool = False, gif_tail: int = 300) -> dict:
+def publish(
+    log_path: Path,
+    out_dir: Path,
+    write_animation: bool = False,
+    gif_tail: int = 300,
+    tmux_pane: str = "",
+    tmux_lines: int = 5000,
+) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
-    train_rows, eval_rows = parse_metrics(log_path)
+    train_rows, eval_rows, source = parse_metrics(log_path, tmux_pane=tmux_pane, tmux_lines=tmux_lines)
     write_csv(
         out_dir / "train_metrics.csv",
         train_rows,
@@ -294,6 +344,7 @@ def publish(log_path: Path, out_dir: Path, write_animation: bool = False, gif_ta
         write_gif(out_dir / "loss_curve.gif", train_rows, gif_tail=gif_tail)
     status = {
         "log": str(log_path),
+        "source": source,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "train_points": len(train_rows),
         "eval_points": len(eval_rows),
@@ -310,10 +361,17 @@ def publish(log_path: Path, out_dir: Path, write_animation: bool = False, gif_ta
 def main() -> None:
     args = parse_args()
     while True:
-        status = publish(args.log, args.out_dir, write_animation=args.gif, gif_tail=args.gif_tail)
+        status = publish(
+            args.log,
+            args.out_dir,
+            write_animation=args.gif,
+            gif_tail=args.gif_tail,
+            tmux_pane=args.tmux_pane,
+            tmux_lines=args.tmux_lines,
+        )
         print(
             f"[{status['generated_at']}] train_points={status['train_points']} "
-            f"eval_points={status['eval_points']} latest={status['latest_train']}"
+            f"eval_points={status['eval_points']} source={status['source']} latest={status['latest_train']}"
         )
         if args.once:
             break
