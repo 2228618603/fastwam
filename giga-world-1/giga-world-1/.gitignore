@@ -1,0 +1,135 @@
+# ==============================
+# Compiled / cache
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.env
+.venv/
+
+# ==============================
+# Model weights / checkpoints (large files)
+# ==============================
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.npy
+*.npz
+*_ckpt
+*_ckpt/
+1_formal_ckpts/
+checkpoint*/
+ckpt*/
+
+# ==============================
+# Model directories (excluded from version control)
+# ==============================
+model/
+model/**
+output/
+output/**
+
+# ==============================
+# Logs / experiment tracking
+# ==============================
+*.log
+wandb/
+*.log.*
+logs/
+output/
+output_gigaworld/
+ablation_*/
+profile
+*.prof
+
+# ==============================
+# Cache directories
+# ==============================
+.cache/
+*.cache*
+cache/
+.gradio/
+*.tmp
+*temp*
+*temp_path*/
+temp/
+
+# # ==============================
+# # Video / images / media (large files)
+# # ==============================
+# *.gif
+# *.bmp
+# *.mov
+# *.mkv
+# *.mp4
+# *.avi
+# *.webm
+# *.flv
+# *.png
+# *.jpg
+# *.jpeg
+# *.svg
+# *.ico
+
+# ==============================
+# Archives / datasets
+# ==============================
+*.zip
+*.tar
+*.tar.gz
+*.gz
+*.bz2
+*.xz
+*.rar
+*.txt.gz
+demo_data/
+Videoreward/
+
+# ==============================
+# Docs / build packages
+# ==============================
+*.html
+*.pdf
+*.whl
+poetry.lock
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ==============================
+# System files / secrets
+# ==============================
+.DS_Store
+*DS_Store
+*.pem
+*.key
+*.pub
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ==============================
+# Config allowlist (must keep)
+# ==============================
+!.gitignore
+!requirements.txt
+!*.py
+!*.yaml
+!*.yml
+!*.md
+!*.sh
+
+# Project-specific large file directories
+AMT-S.yaml
