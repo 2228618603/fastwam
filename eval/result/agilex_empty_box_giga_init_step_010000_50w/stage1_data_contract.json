@@ -1,0 +1,26 @@
+{
+  "dataset_len": 18699,
+  "dataset_root_requested": "/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_071",
+  "dataset_root_resolved": "/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711",
+  "sample": {
+    "action_shape": [
+      32,
+      14
+    ],
+    "has_context": true,
+    "has_gt_action": false,
+    "prompt": "A video recorded from a robot's point of view executing the following instruction: Alternately use the left arm and the right arm to pick up the goods from the nearby box and place them in the distant box, until the nearby box is empty.",
+    "proprio_shape": [
+      32,
+      14
+    ],
+    "video_shape": [
+      3,
+      9,
+      384,
+      320
+    ]
+  },
+  "sample_index": 0,
+  "stage": "data"
+}

@@ -1,0 +1,65 @@
+{
+  "config": {
+    "action_video_freq_ratio": 4,
+    "mixed_precision": "bf16",
+    "model_target": "fastwam.runtime.create_fastwam",
+    "num_frames": 33,
+    "val_target": "fastwam.datasets.lerobot.agilex_dataset.AgilexRobotVideoDataset"
+  },
+  "cuda_available": false,
+  "cuda_device_count": 0,
+  "device": "cuda:0",
+  "paths": {
+    "action_dit": {
+      "exists": true,
+      "is_dir": false,
+      "is_file": true,
+      "path": "/mnt/data/chw/fastwam/checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt"
+    },
+    "checkpoint": {
+      "exists": true,
+      "is_dir": false,
+      "is_file": true,
+      "path": "/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_010000.pt"
+    },
+    "config": {
+      "exists": true,
+      "is_dir": false,
+      "is_file": true,
+      "path": "/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/config.yaml"
+    },
+    "dataset_root_requested": {
+      "exists": false,
+      "is_dir": false,
+      "is_file": false,
+      "path": "/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_071"
+    },
+    "dataset_root_resolved": {
+      "exists": true,
+      "is_dir": true,
+      "is_file": false,
+      "path": "/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711"
+    },
+    "repo_root": {
+      "exists": true,
+      "is_dir": true,
+      "is_file": false,
+      "path": "/home/chw/code/packages/FastWAM"
+    },
+    "stats": {
+      "exists": true,
+      "is_dir": false,
+      "is_file": true,
+      "path": "/mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json"
+    },
+    "text_cache": {
+      "exists": true,
+      "is_dir": true,
+      "is_file": false,
+      "path": "/mnt/data/chw/fastwam/text_embeds_cache/agilex_empty_box_542_0711"
+    }
+  },
+  "python": "/home/chw/miniconda3/envs/fastwam/bin/python",
+  "stage": "check",
+  "torch": "2.7.1+cu128"
+}
