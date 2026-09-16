@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+export FASTWAM_MODEL_ROOT="${FASTWAM_MODEL_ROOT:-/media/geekplus/PortableSSD/chw/fastwam-load-giga}"
 if [[ -z "${PYTHON_BIN:-}" && -x /home/chw/miniconda3/envs/fastwam/bin/python ]]; then
   PYTHON_BIN=/home/chw/miniconda3/envs/fastwam/bin/python
 fi

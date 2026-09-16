@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = PACKAGE_ROOT / "app"
 ASSET_DIR = PACKAGE_ROOT / "assets"
-WEIGHTS_DIR = PACKAGE_ROOT / "weights"
-MODEL_CACHE_DIR = PACKAGE_ROOT / "model_cache"
 CONFIGS_DIR = PACKAGE_ROOT / "configs"
+
+DEFAULT_EXTERNAL_MODEL_ROOT = Path(
+    os.environ.get("FASTWAM_MODEL_ROOT", "/media/geekplus/PortableSSD/chw/fastwam-load-giga")
+)
+WEIGHTS_DIR = DEFAULT_EXTERNAL_MODEL_ROOT / "weights"
+MODEL_CACHE_DIR = DEFAULT_EXTERNAL_MODEL_ROOT / "model_cache"
+PACKAGE_WEIGHTS_DIR = PACKAGE_ROOT / "weights"
+PACKAGE_MODEL_CACHE_DIR = PACKAGE_ROOT / "model_cache"
 
 REPO_FALLBACK_ROOT = Path("/home/chw/code/packages/FastWAM")
 SRC_FALLBACK_ROOT = REPO_FALLBACK_ROOT / "src"
@@ -56,4 +63,3 @@ def prefer_packaged(path: Path, fallback: Path | None = None) -> Path:
     if fallback is not None and fallback.exists():
         return fallback
     return path
-

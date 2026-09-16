@@ -29,6 +29,8 @@ try:
         FALLBACK_MODEL_CACHE,
         MODEL_CACHE_DIR,
         PACKAGE_ROOT,
+        PACKAGE_MODEL_CACHE_DIR,
+        PACKAGE_WEIGHTS_DIR,
         REPO_FALLBACK_ROOT,
         SRC_FALLBACK_ROOT,
         STATE_LAYOUT_DOC,
@@ -115,18 +117,27 @@ class FastWAMLocalPolicy:
         self._torch = torch
         self._OmegaConf = OmegaConf
 
-        self.ckpt_path = Path(ckpt).expanduser() if ckpt else prefer_packaged(DEFAULT_CKPT, FALLBACK_CKPT)
+        self.ckpt_path = (
+            Path(ckpt).expanduser()
+            if ckpt
+            else prefer_packaged(DEFAULT_CKPT, prefer_packaged(PACKAGE_WEIGHTS_DIR / "step_015000.pt", FALLBACK_CKPT))
+        )
         self.stats_path = Path(dataset_stats).expanduser() if dataset_stats else DEFAULT_DATASET_STATS
         self.context_path = Path(fixed_context).expanduser() if fixed_context else DEFAULT_CONTEXT
         self.action_dit_path = (
-            Path(action_dit).expanduser() if action_dit else prefer_packaged(DEFAULT_ACTION_DIT, FALLBACK_ACTION_DIT)
+            Path(action_dit).expanduser()
+            if action_dit
+            else prefer_packaged(
+                DEFAULT_ACTION_DIT,
+                prefer_packaged(PACKAGE_WEIGHTS_DIR / "ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt", FALLBACK_ACTION_DIT),
+            )
         )
         self.configs_dir = Path(configs_dir).expanduser() if configs_dir else CONFIGS_DIR
         self.dataset_dir = Path(dataset_dir).expanduser() if dataset_dir else FALLBACK_DATASET_DIR
         if model_cache:
             self.model_cache = Path(model_cache).expanduser()
         else:
-            packaged_cache_ready = (
+            external_cache_ready = (
                 MODEL_CACHE_DIR / "Wan-AI" / "Wan2.2-TI2V-5B"
             ).exists() and (
                 MODEL_CACHE_DIR
@@ -134,7 +145,20 @@ class FastWAMLocalPolicy:
                 / "Wan-Series-Converted-Safetensors"
                 / "Wan2.2_VAE.safetensors"
             ).exists()
-            self.model_cache = MODEL_CACHE_DIR if packaged_cache_ready else FALLBACK_MODEL_CACHE
+            packaged_cache_ready = (
+                PACKAGE_MODEL_CACHE_DIR / "Wan-AI" / "Wan2.2-TI2V-5B"
+            ).exists() and (
+                PACKAGE_MODEL_CACHE_DIR
+                / "DiffSynth-Studio"
+                / "Wan-Series-Converted-Safetensors"
+                / "Wan2.2_VAE.safetensors"
+            ).exists()
+            if external_cache_ready:
+                self.model_cache = MODEL_CACHE_DIR
+            elif packaged_cache_ready:
+                self.model_cache = PACKAGE_MODEL_CACHE_DIR
+            else:
+                self.model_cache = FALLBACK_MODEL_CACHE
 
         for label, path in (
             ("checkpoint", self.ckpt_path),

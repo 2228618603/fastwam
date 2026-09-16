@@ -1,19 +1,61 @@
 # FastWAM 4090 真机本地部署教程
 
-这个目录可以直接打包发到真机 4090 主机上运行。它把模型推理、ROS2 相机读取、Piper 双臂状态读取和动作下发放在同一个进程里，不再走“真机 client 请求远程 GPU server”的 websocket 通信链路。
+这个目录可以打包发到真机 4090 主机上运行。它把模型推理、ROS2 相机读取、Piper 双臂状态读取和动作下发放在同一个进程里，不再走“真机 client 请求远程 GPU server”的 websocket 通信链路。
+
+当前建议拆成两个目录：
+
+```text
+代码目录：/home/geekplus/chw/fastwam-load-giga
+权重目录：/media/geekplus/PortableSSD/chw/fastwam-load-giga
+```
+
+代码目录只放 Python 源码、部署脚本、配置、小的 stats/context 文件；权重目录放 34G 左右的大模型文件。
+
+## 0. 在源机器上生成两个包
+
+在 `geekplus-h800-141` 上执行：
+
+```bash
+cd /home/chw/code/packages/FastWAM/deploy-all-on-4090/code
+bash scripts/make_split_archives.sh
+```
+
+会生成：
+
+```text
+/home/chw/code/packages/FastWAM/deploy-all-on-4090/dist/fastwam-load-giga-code.tar.gz
+/home/chw/code/packages/FastWAM/deploy-all-on-4090/dist/fastwam-load-giga-models.tar.zst
+```
 
 ## 1. 真机侧启动前检查
 
-先进入你 scp 过去的目录：
+先解压代码包到本机 SSD：
 
 ```bash
-cd /path/to/code
+mkdir -p /home/geekplus/chw
+tar -C /home/geekplus/chw -xzf fastwam-load-giga-code.tar.gz
 ```
 
-确认大文件都在包内：
+再解压权重包到移动 SSD：
 
 ```bash
-python scripts/verify_bundle_integrity.py --root .
+mkdir -p /media/geekplus/PortableSSD/chw
+tar -C /media/geekplus/PortableSSD/chw --use-compress-program zstd \
+  -xf fastwam-load-giga-models.tar.zst
+```
+
+进入代码目录：
+
+```bash
+cd /home/geekplus/chw/fastwam-load-giga
+```
+
+确认代码和权重都完整：
+
+```bash
+python scripts/verify_bundle_integrity.py \
+  --root /home/geekplus/chw/fastwam-load-giga \
+  --model-root /media/geekplus/PortableSSD/chw/fastwam-load-giga
 ```
 
 如果真机默认 `python` 不是 FastWAM 环境，可以显式指定：
@@ -26,6 +68,12 @@ export PYTHON_BIN=/path/to/your/fastwam/env/bin/python
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
+```
+
+默认权重目录就是 `/media/geekplus/PortableSSD/chw/fastwam-load-giga`。如果你临时放在别处，设置：
+
+```bash
+export FASTWAM_MODEL_ROOT=/your/model/root
 ```
 
 ## 2. 第一步：离线 Smoke Test
@@ -250,7 +298,7 @@ Piper 速度百分比。默认脚本用 `10`，代码里硬上限是 `30`。第�
 按这个顺序来：
 
 ```bash
-cd /path/to/code
+cd /home/geekplus/chw/fastwam-load-giga
 
 # 1. 只测模型加载和推理，不碰真机硬件
 bash scripts/run_self_test.sh
@@ -298,7 +346,7 @@ action[13]    right gripper
 
 ## 10. 包内模型文件
 
-当前包已经包含：
+当前权重目录应包含：
 
 - `weights/step_015000.pt`
 - `weights/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt`
@@ -306,6 +354,8 @@ action[13]    right gripper
 - `model_cache/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors`
 - `assets/fixed_task_context.pt`
 - `assets/train_stats.json`
+
+其中 `assets/` 在代码目录内，`weights/` 和 `model_cache/` 在移动 SSD 的权重目录内。
 
 本部署使用固定任务 embedding，启动时会看到：
 
