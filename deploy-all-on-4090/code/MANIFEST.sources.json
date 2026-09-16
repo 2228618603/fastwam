@@ -1,0 +1,32 @@
+{
+  "task": "agilex_empty_box_all_542_0711",
+  "checkpoint": {
+    "source": "/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_015000.pt",
+    "package_path": "weights/step_015000.pt"
+  },
+  "action_dit": {
+    "source": "/mnt/data/chw/fastwam/checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt",
+    "package_path": "weights/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt"
+  },
+  "stats": {
+    "source": "/mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json",
+    "package_path": "assets/train_stats.json"
+  },
+  "fixed_context": {
+    "source": "/mnt/data/chw/fastwam/text_embeds_cache/agilex_empty_box_542_0711/36a916de41f5bacbbd1a8c25c384fe35f22b6dbcab169f8e97761316eff08a74.t5_len128.wan22ti2v5b.pt",
+    "package_path": "assets/fixed_task_context.pt"
+  },
+  "wan_base": {
+    "source": "/mnt/data/chw/fastwam/checkpoints/Wan-AI/Wan2.2-TI2V-5B",
+    "package_path": "model_cache/Wan-AI/Wan2.2-TI2V-5B"
+  },
+  "vae": {
+    "source": "/mnt/data/chw/fastwam/checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors",
+    "package_path": "model_cache/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors"
+  },
+  "text_encoder": {
+    "package_path": null,
+    "note": "Not packaged. Local deployment uses precomputed fixed_task_context.pt and load_text_encoder=false."
+  }
+}
+

@@ -239,6 +239,17 @@ temp/
 envs.txt
 manifest.json
 
+# Local 4090 deployment package: keep code/docs/small runtime metadata, but
+# never commit bundled model weights or copied model cache.
+/deploy-all-on-4090/code/weights/
+/deploy-all-on-4090/code/model_cache/
+/deploy-all-on-4090/code/MANIFEST.generated.json
+!/deploy-all-on-4090/code/assets/
+!/deploy-all-on-4090/code/assets/train_stats.json
+!/deploy-all-on-4090/code/assets/fixed_task_context.pt
+!/deploy-all-on-4090/code/assets/task.txt
+!/deploy-all-on-4090/code/requirements_4090.txt
+
 
 # locks and t5 temp files
 *.locks*

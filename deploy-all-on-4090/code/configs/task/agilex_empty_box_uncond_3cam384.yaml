@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - override /data: agilex_empty_box
+  - override /model: fastwam
+  - _self_
+
+batch_size: 1
+num_workers: 0
+model:
+  mot_checkpoint_mixed_attn: false
+  compile_training_denoise: false
+
+lr_scheduler_type: cosine
+learning_rate: 1.0e-5
+num_epochs: 1
+max_steps: 1
+log_every: 1
+save_every: 1
+eval_every: 1
+
+gradient_accumulation_steps: 1
+weight_decay: 1.0e-2
+mixed_precision: bf16
+resume: /mnt/data/chw/fastwam/checkpoints/robotwin_release/robotwin_uncond_3cam_384.pt

@@ -1,0 +1,14 @@
+torch
+torchvision
+numpy
+pillow
+hydra-core
+omegaconf
+safetensors
+einops
+diffusers
+transformers
+accelerate
+pyarrow
+opencv-python
+

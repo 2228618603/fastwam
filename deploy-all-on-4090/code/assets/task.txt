@@ -1,0 +1,2 @@
+Alternately use the left arm and the right arm to pick up the goods from the nearby box and place them in the distant box, until the nearby box is empty.
+
