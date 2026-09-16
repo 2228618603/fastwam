@@ -2,7 +2,7 @@
 FastWAM Piper client for the Agilex Cobot Magic dual-arm robot.
 
 Runs on the ROBOT computer (ROS2 + Piper SDK). Needs no torch/CUDA - it talks to
-``fastwam_server.py`` over websocket + msgpack.
+``deploy-9-8/robot_server.py`` over websocket + msgpack.
 
 =============================================================================
                           SAFETY MODEL - READ FIRST
@@ -59,12 +59,12 @@ State sent to the server (14D, TRAINING order - different from action order!):
 
 Typical bring-up sequence
 -------------------------
- 1) python fastwam_piper_client.py --server ws://<gpu-host>:8000 --mode log-only
- 2) python fastwam_piper_client.py --mode replay --episode-parquet <...>.parquet \
+ 1) python deploy-9-8/robot_client.py --server ws://<gpu-host>:8000 --mode log-only
+ 2) python deploy-9-8/robot_client.py --mode replay --episode-parquet <...>.parquet \
         --confirm-safety --speed-percent 10
- 3) python fastwam_piper_client.py --server ... --mode step --max-steps 1 \
+ 3) python deploy-9-8/robot_client.py --server ... --mode step --max-steps 1 \
         --confirm-safety --speed-percent 10
- 4) python fastwam_piper_client.py --server ... --mode closed-loop \
+ 4) python deploy-9-8/robot_client.py --server ... --mode closed-loop \
         --confirm-safety --i-am-watching --max-duration 30 --speed-percent 10
 
 Starting pose
@@ -132,7 +132,7 @@ SPEED_PERCENT_HARD_MAX = 30  # refuse anything faster during bring-up
 # ([0:6] left joints, [6] left gripper, [7:13] right joints, [13] right gripper).
 #
 # Computed as the mean first frame across ALL 471 episodes of
-# agilex_empty_the_box_all_470. Every training episode begins from a
+# agilex_empty_the_box_all_542_0711. Every training episode begins from a
 # task-appropriate working pose (arms reaching toward the boxes) and never from
 # the mechanical zero pose, so inference must start from something inside this
 # distribution — otherwise the model is extrapolating from a state it never saw.
@@ -178,7 +178,7 @@ def _warn_gripper_scale(gripper_scale: float) -> None:
 
 def _parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--server", default=None, help="ws://host:port of fastwam_server.py (not needed for replay).")
+    p.add_argument("--server", default=None, help="ws://host:port of deploy-9-8/robot_server.py (not needed for replay).")
     p.add_argument("--mode", default="log-only",
                    choices=["log-only", "replay", "step", "closed-loop"],
                    help="See SAFETY MODEL in the module docstring. Default log-only sends nothing.")

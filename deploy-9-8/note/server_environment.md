@@ -4,20 +4,20 @@
 
 ## 1. 结论
 
-服务器端直接使用本机已有 conda 环境 `fastwam`，不要用 `base`。本机 2026-09-09 已验证通过，真实部署可以直接启动 server；换代码、换权重、换 stats、重装环境后再重跑 `--self-test`。
+服务器端直接使用本机已有 conda 环境 `fastwam`，不要用 `base`。本次部署默认使用
+2026-09-16 最新训练 checkpoint `step_015000.pt`；换代码、换权重、换 stats、重装环境后都要重跑 `--self-test`。
 
-推荐使用空闲 GPU 4：
+先用 `nvidia-smi` 选一张最空的卡。2026-09-16 本机 8 卡都有任务，我用 GPU 4 做过低影响 self-test；
+下面以 GPU 4 为例：
 
 ```bash
 cd /home/chw/code/packages/FastWAM
 source /home/chw/miniconda3/etc/profile.d/conda.sh
 conda activate fastwam
 CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
-  --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-  --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
-  --task agilex_empty_box_uncond_3cam384 \
   --host 0.0.0.0 \
-  --port 8000
+  --port 8000 \
+  --num-inference-steps 4
 ```
 
 ## 2. 常见报错与原因
@@ -68,24 +68,24 @@ nvidia-smi   # 能看到 L20Y 等 GPU，显存未占满
 ss -ltnp | grep ':8000' || true
 ```
 
-本机 2026-09-09 检查时 GPU 4-7 空闲，GPU 0-3 正在占用。启动时建议显式设置 `CUDA_VISIBLE_DEVICES=4`，避免抢占已有任务。
+启动时建议显式设置 `CUDA_VISIBLE_DEVICES=<选中的单卡>`，避免抢占已有任务。不要直接暴露 8 张卡给部署服务。
 
 ## 5. 模型和数据文件检查
 
 ```bash
 cd /home/chw/code/packages/FastWAM
-ls -lh /mnt/data/chw/fastwam/cp-copy/step_020000.pt
-ls -lh /mnt/data/chw/fastwam/cp-copy/dataset_stats.json
+ls -lh /mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_015000.pt
+ls -lh /mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json
 ls -lh checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt
 test -d checkpoints/Wan-AI/Wan2.2-TI2V-5B
 test -d checkpoints/Wan-AI/Wan2.1-T2V-1.3B
 test -d checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors
-head -n 1 /mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_470/meta/tasks.jsonl
+head -n 1 /mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711/meta/tasks.jsonl
 ```
 
 说明：
 
-- `step_020000.pt` 是当前默认部署 checkpoint。
+- `step_015000.pt` 是当前默认部署 checkpoint。
 - `dataset_stats.json` 是归一化统计，必须与 checkpoint 匹配。
 - `ActionDiT` 和 Wan 基础模型缓存用于构建模型骨架。
 - 如果训练数据目录不可用，需要在启动 server 时传 `--instruction "<任务文本>"`。
@@ -97,10 +97,9 @@ cd /home/chw/code/packages/FastWAM
 source /home/chw/miniconda3/etc/profile.d/conda.sh
 conda activate fastwam
 CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
-  --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-  --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
-  --task agilex_empty_box_uncond_3cam384 \
-  --self-test
+  --self-test \
+  --num-inference-steps 4 \
+  --cuda-memory-fraction 0.32
 ```
 
 `--self-test` 跑完后应看到：
@@ -120,11 +119,9 @@ cd /home/chw/code/packages/FastWAM
 source /home/chw/miniconda3/etc/profile.d/conda.sh
 conda activate fastwam
 CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
-  --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-  --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
-  --task agilex_empty_box_uncond_3cam384 \
   --host 0.0.0.0 \
-  --port 8000
+  --port 8000 \
+  --num-inference-steps 4
 ```
 
 另开一个终端检查：
@@ -162,14 +159,14 @@ pip install websockets msgpack msgpack-numpy
 
 > 注意：`pyproject.toml` 里的依赖是训练用的全集；纯推理最少只需要上面第 3 节表格里的包。但为了和训练环境一致、避免版本漂移，重建时建议按 `pyproject.toml` 完整安装。
 
-## 9. 验证记录（2026-09-09，已全部通过）
+## 9. 验证记录（2026-09-16，最新 checkpoint）
 
 | 检查项 | 结果 |
 |---|---|
 | `conda activate fastwam` 后依赖导入 | 全部 OK（numpy 2.2.6 / torch 2.7.1+cu128 / hydra / websockets / msgpack ...） |
-| 模型和 stats 文件 | `/mnt/data/chw/fastwam/cp-copy/step_020000.pt` 与 `dataset_stats.json` 可读 |
+| 模型和 stats 文件 | `step_015000.pt` 与 `/mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json` 可读 |
 | 任务文本 | 从训练数据 `meta/tasks.jsonl` 读取成功 |
-| `--self-test` | `SELF TEST PASSED`，退出码 0，chunk `(32, 14)`，单次推理约 1.0s |
+| `--self-test` | `SELF TEST PASSED`，退出码 0，chunk `(32, 14)`，单次推理 `0.842s`，未 OOM |
 | 正式服务模式 | 日志出现 `serving on ws://0.0.0.0:8000` |
 | websocket ping 往返 | `ok: True`，返回 horizon 32 和三路 camera keys |
 | websocket infer 往返 | 返回 action chunk `(32, 14)`，全为有限值，单次推理约 0.94s |
@@ -198,10 +195,10 @@ pip install websockets msgpack msgpack-numpy
 KeyError: 'default'   (fastwam_processor.py set_normalizer_from_stats)
 ```
 
-**原因**：checkpoint（`/mnt/data/chw/fastwam/cp-copy/step_020000.pt`）训练时 state 是
-`[joint 12D, gripper 2D]` 两个分量（其配套 `dataset_stats.json` 的 `state` 键为
-`joint`/`gripper`）；而仓库里 `configs/data/agilex_empty_box.yaml` 当前声明的是单个
-`default` 14D，两者对不上，normalizer 按 `default` 去 stats 里取键就炸了。
+**原因**：历史 checkpoint 的 state 可能是 `[joint 12D, gripper 2D]` 两个分量，而仓库里
+`configs/data/agilex_empty_box.yaml` 当前声明的是单个 `default` 14D，两者对不上时，
+normalizer 按 `default` 去 stats 里取键就会报错。最新 `step_015000.pt` 使用的 stats
+是单 `default` 14D，但 server 仍保留自动适配逻辑，方便兼容历史 checkpoint。
 
 **修复**：在 `deploy-9-8/robot_server.py` 的 `FastWAMActionServer.__init__` 里，compose
 完 config 后以 `dataset_stats.json` 为准重建 `shape_meta.state`（从 stats 的 state
@@ -235,7 +232,9 @@ The given NumPy array is not writable
 
 ## 14. 其他常见问题
 
-- **`Checkpoint not found` / `dataset_stats.json not found`**：确认 `/mnt/data/chw/fastwam/cp-copy/` 下两个文件都在（当前已确认存在）。
+- **`Checkpoint not found` / `dataset_stats.json not found`**：确认最新权重
+  `/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_015000.pt`
+  和 stats `/mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json` 都存在。
 - **hydra 报 `ConfigAttributeError` / 找不到 task**：确认 `--task` 名称与 `configs/task/` 下的 yaml 文件名一致（本任务为 `agilex_empty_box_uncond_3cam384`）。
 - **CUDA 不可用**：脚本会自动回落到 CPU 并打 warning，但推理会非常慢，真机部署不可接受，先修 GPU 环境。
 - **训练数据目录**：服务端读取任务文本（`meta/tasks.jsonl`）需要访问 `dataset_dirs` 指向的训练数据（当前指向 `/mnt/data/dataset/...`），如果该目录不可用，启动时会报错，可改用 `--instruction` 显式传入任务文本。

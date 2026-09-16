@@ -19,8 +19,9 @@ GPU 服务器不能只拷贝 `robot_server.py`。它还需要完整 FastWAM 运�
 - `src/fastwam/`
 - `checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt`
 - `checkpoints/Wan-AI/` 和 `checkpoints/DiffSynth-Studio/` 下的 Wan 基础模型缓存
-- checkpoint: `/mnt/data/chw/fastwam/cp-copy/step_020000.pt`
-- dataset stats: `/mnt/data/chw/fastwam/cp-copy/dataset_stats.json`
+- checkpoint: `/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_015000.pt`
+- dataset stats: `/mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json`
+- dataset dir: `/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711`
 - 训练数据 `meta/tasks.jsonl`，或启动时显式传 `--instruction`
 
 ### 机器人侧 Client
@@ -48,7 +49,7 @@ ss -ltnp | grep ':8000' || true
 
 成功检查点：
 
-- 至少有一张 GPU 显存足够空闲。本机 2026-09-09 检查时 GPU 4-7 空闲，建议 `CUDA_VISIBLE_DEVICES=4`。
+- 至少有一张 GPU 显存足够空闲。2026-09-16 本机 8 卡都有任务，我用 GPU 4 做低影响 self-test；启动前重新看 `nvidia-smi`。
 - `8000` 端口没有被旧 server 占用。
 
 ### Step A. GPU Server 自测
@@ -60,10 +61,9 @@ cd /home/chw/code/packages/FastWAM
 source /home/chw/miniconda3/etc/profile.d/conda.sh
 conda activate fastwam
 CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
-  --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-  --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
-  --task agilex_empty_box_uncond_3cam384 \
-  --self-test
+  --self-test \
+  --num-inference-steps 4 \
+  --cuda-memory-fraction 0.32
 ```
 
 成功检查点：
@@ -74,7 +74,7 @@ CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
 - 日志出现 `action chunk shape: (32, 14)`。
 - 日志出现 `=== SELF TEST PASSED ===`。
 
-本机 2026-09-09 已通过，单次 synthetic 推理约 `1.0s`。
+本机 2026-09-16 使用最新 `step_015000.pt` 跑过本地加载自测，未 OOM。正式真机前仍建议按本步骤复测一次。
 
 ### Step B. 启动 GPU Server 正式服务
 
@@ -83,11 +83,9 @@ cd /home/chw/code/packages/FastWAM
 source /home/chw/miniconda3/etc/profile.d/conda.sh
 conda activate fastwam
 CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
-  --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-  --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
-  --task agilex_empty_box_uncond_3cam384 \
   --host 0.0.0.0 \
-  --port 8000
+  --port 8000 \
+  --num-inference-steps 4
 ```
 
 成功检查点：
@@ -99,7 +97,7 @@ CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
 
 ### Step C1. 本机协议 Smoke Test
 
-只验证 server 协议，不需要 ROS2 / Piper / 真机。这个步骤在本机 2026-09-09 已通过，真实联调时可以跳过。
+只验证 server 协议，不需要 ROS2 / Piper / 真机。这个步骤用于确认 GPU server 和 client 协议链路。
 
 ```bash
 cd /home/chw/code/packages/FastWAM

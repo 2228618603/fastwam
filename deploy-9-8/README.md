@@ -4,12 +4,12 @@
 
 ## 当前结论
 
-2026-09-09 已在本机 `fastwam` 环境验证通过：
+2026-09-16 已将默认部署权重切到本次训练最新 checkpoint，并在本机完成 server `--self-test`；
+真机运动仍必须按本文分阶段验证：
 
-- server `--self-test`：通过，输出 action chunk `(32, 14)`。
-- server 正式监听 `0.0.0.0:8000`：通过。
-- 本机 websocket `ping/reset/infer`：通过。
-- `robot_client.py --mode log-only --no-ros2` synthetic smoke：通过。
+- 最新 `step_015000.pt` 的 server `--self-test`：通过，输出 action chunk `(32, 14)`，未 OOM。
+- server 正式监听、本机 websocket `ping/reset/infer`、`robot_client.py --mode log-only --no-ros2`
+  是历史链路验证项；换成最新 checkpoint 后，真机前建议按下方 Step A/B/C1 重新跑一遍。
 
 这说明 GPU server 和协议链路可以跑通。真实相机、Piper 读状态、归位、单步动作仍必须在机器人侧逐级验证。
 
@@ -26,26 +26,26 @@
 
 ## 默认模型
 
-- checkpoint: `/mnt/data/chw/fastwam/cp-copy/step_020000.pt`
-- dataset stats: `/mnt/data/chw/fastwam/cp-copy/dataset_stats.json`
+- checkpoint: `/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_015000.pt`
+- dataset stats: `/mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json`
+- dataset dir: `/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711`
 - task config: `agilex_empty_box_uncond_3cam384`
 - ActionDiT backbone: `checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt`
 - Wan 基础模型缓存: `checkpoints/Wan-AI/` 和 `checkpoints/DiffSynth-Studio/`
 
 ## GPU Server 启动
 
-本机 GPU 0-3 当前常被占用，建议先用空闲 GPU 4：
+先看 GPU 占用，选择显存和算力最空的一张卡。2026-09-16 本机 8 卡都有任务，
+我用 GPU 4 做过低影响 self-test；下面命令以 GPU 4 为例：
 
 ```bash
 cd /home/chw/code/packages/FastWAM
 source /home/chw/miniconda3/etc/profile.d/conda.sh
 conda activate fastwam
 CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
-  --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-  --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
-  --task agilex_empty_box_uncond_3cam384 \
   --host 0.0.0.0 \
-  --port 8000
+  --port 8000 \
+  --num-inference-steps 4
 ```
 
 首次部署、换代码、换 checkpoint、换 stats、重装环境后先跑自测：
@@ -55,10 +55,9 @@ cd /home/chw/code/packages/FastWAM
 source /home/chw/miniconda3/etc/profile.d/conda.sh
 conda activate fastwam
 CUDA_VISIBLE_DEVICES=4 python deploy-9-8/robot_server.py \
-  --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-  --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
-  --task agilex_empty_box_uncond_3cam384 \
-  --self-test
+  --self-test \
+  --num-inference-steps 4 \
+  --cuda-memory-fraction 0.32
 ```
 
 ## Client 启动
@@ -84,6 +83,23 @@ cd /home/chw/code/packages/FastWAM
 python deploy-9-8/robot_client.py \
   --server ws://<GPU_SERVER_IP>:8000 \
   --mode log-only
+```
+
+第一次会动真机时，从单步开始：
+
+```bash
+source /opt/ros/humble/setup.bash
+conda activate gwp_client
+cd /home/chw/code/packages/FastWAM
+python deploy-9-8/robot_client.py \
+  --server ws://<GPU_SERVER_IP>:8000 \
+  --mode step \
+  --max-steps 1 \
+  --goto-start \
+  --confirm-safety \
+  --speed-percent 10 \
+  --action-hz 10 \
+  --replan-steps 1
 ```
 
 ## 可跳过与不可跳过

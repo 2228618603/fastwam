@@ -10,7 +10,7 @@ Design notes
   (same ``model.infer_action`` call, same normalize/denormalize path via
   ``FastWAMProcessor`` + ``dataset_stats.json``, same 3-camera composite).
 - The camera composite MUST match training exactly (see
-  ``configs/data/agilex_empty_the_box_all_470.yaml`` +
+  ``configs/data/agilex_empty_box.yaml`` +
   ``RobotVideoDataset._get``, ``concat_multi_camera="robotwin"``):
       top    -> resized to 320x256 (WxH)
       lwrist -> resized to 160x128, rwrist -> resized to 160x128
@@ -46,9 +46,10 @@ resizing/compositing so the client cannot silently break preprocessing.
 
 Usage
 -----
-    python fastwam_server.py \
-        --ckpt /mnt/data/chw/fastwam/cp-copy/step_020000.pt \
-        --dataset-stats /mnt/data/chw/fastwam/cp-copy/dataset_stats.json \
+    python deploy-9-8/robot_server.py \
+        --ckpt /mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_015000.pt \
+        --dataset-stats /mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json \
+        --dataset-dir /mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711 \
         --task agilex_empty_box_uncond_3cam384 \
         --host 0.0.0.0 --port 8000
 """
@@ -80,7 +81,7 @@ logging.basicConfig(
 logger = logging.getLogger("fastwam_server")
 
 # Order in which the 14D proprio vector must be assembled, matching
-# configs/data/agilex_empty_the_box_all_470.yaml -> shape_meta.state
+# configs/data/agilex_empty_box.yaml -> shape_meta.state
 # ([joint 12D, gripper 2D]) and ConcatLeftAlign's concat order.
 STATE_LAYOUT_DOC = (
     "state[0:6]=left arm joints (rad), state[6:12]=right arm joints (rad), "
@@ -95,12 +96,25 @@ CAMERA_KEYS = ("top", "left_wrist", "right_wrist")
 # (width, height) targets, matching the training-time robotwin composite
 TOP_SIZE_WH = (320, 256)
 WRIST_SIZE_WH = (160, 128)
+DEFAULT_CKPT = Path(
+    "/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/"
+    "checkpoints/weights/step_015000.pt"
+)
+DEFAULT_DATASET_STATS = Path("/mnt/data/chw/fastwam/dataset_stats/agilex_empty_box/train_stats.json")
+DEFAULT_DATASET_DIR = Path(
+    "/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711"
+)
+DEFAULT_ACTION_DIT = Path("/mnt/data/chw/fastwam/checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt")
 
 
 def _parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--ckpt", required=True, help="Path to trained weights .pt (e.g. step_019610.pt).")
-    p.add_argument("--dataset-stats", required=True, help="Path to dataset_stats.json from the training run.")
+    p.add_argument("--ckpt", default=str(DEFAULT_CKPT), help="Path to trained weights .pt.")
+    p.add_argument("--dataset-stats", default=str(DEFAULT_DATASET_STATS), help="Path to dataset_stats.json from the training run.")
+    p.add_argument("--dataset-dir", default=str(DEFAULT_DATASET_DIR),
+                   help="Training dataset directory used for task text lookup and config consistency.")
+    p.add_argument("--action-dit", default=str(DEFAULT_ACTION_DIT),
+                   help="ActionDiT backbone path used when constructing the model.")
     p.add_argument("--task", default="agilex_empty_box_uncond_3cam384", help="Hydra task config name.")
     p.add_argument("--configs-dir", default=str(PROJECT_ROOT / "configs"), help="FastWAM configs dir.")
     p.add_argument("--host", default="0.0.0.0")
@@ -112,6 +126,8 @@ def _parse_args():
     p.add_argument("--num-inference-steps", type=int, default=10)
     p.add_argument("--sigma-shift", type=float, default=None)
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--cuda-memory-fraction", type=float, default=None,
+                   help="Optional torch.cuda per-process memory fraction, useful for low-impact smoke tests.")
     p.add_argument("--instruction", default=None,
                    help="Default task text; if omitted, read from the dataset's meta/tasks.jsonl if available.")
     p.add_argument("--self-test", action="store_true",
@@ -127,6 +143,8 @@ class FastWAMActionServer:
         self,
         ckpt: str,
         dataset_stats: str,
+        dataset_dir: str,
+        action_dit: str,
         task: str,
         configs_dir: str,
         device: str,
@@ -135,6 +153,7 @@ class FastWAMActionServer:
         num_inference_steps: int,
         sigma_shift: Optional[float],
         seed: Optional[int],
+        cuda_memory_fraction: Optional[float],
         instruction: Optional[str],
     ):
         import torch
@@ -151,15 +170,25 @@ class FastWAMActionServer:
 
         ckpt_path = Path(ckpt).expanduser().resolve()
         stats_path = Path(dataset_stats).expanduser().resolve()
+        dataset_path = Path(dataset_dir).expanduser().resolve()
+        action_dit_path = Path(action_dit).expanduser().resolve()
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         if not stats_path.exists():
             raise FileNotFoundError(f"dataset_stats.json not found: {stats_path}")
+        if not dataset_path.exists():
+            raise FileNotFoundError(f"dataset dir not found: {dataset_path}")
+        if not action_dit_path.exists():
+            raise FileNotFoundError(f"ActionDiT backbone not found: {action_dit_path}")
 
         if GlobalHydra.instance().is_initialized():
             GlobalHydra.instance().clear()
         with initialize_config_dir(version_base="1.3", config_dir=str(Path(configs_dir).resolve())):
             cfg = compose(config_name="train", overrides=[f"task={task}"])
+        cfg.data.train.dataset_dirs = [str(dataset_path)]
+        cfg.data.val.dataset_dirs = [str(dataset_path)]
+        cfg.data.train.pretrained_norm_stats = str(stats_path)
+        cfg.data.val.pretrained_norm_stats = str(stats_path)
         self.cfg = cfg
 
         # The checkpoint's dataset_stats.json is the ground truth of the
@@ -184,6 +213,10 @@ class FastWAMActionServer:
             logger.warning("CUDA unavailable; falling back to CPU (this will be very slow).")
             device = "cpu"
         self.device = device
+        if device.startswith("cuda") and cuda_memory_fraction is not None:
+            memory_device = torch.device(device if ":" in device else "cuda:0")
+            torch.cuda.set_per_process_memory_fraction(float(cuda_memory_fraction), device=memory_device)
+            logger.info("Set CUDA per-process memory fraction to %.3f on %s", float(cuda_memory_fraction), memory_device)
 
         # Real-robot inference needs the text encoder (we encode the instruction
         # online rather than relying on the precomputed training cache), matching
@@ -194,6 +227,7 @@ class FastWAMActionServer:
         if not isinstance(model_cfg, dict):
             raise TypeError(f"Expected cfg.model to convert to dict, got {type(model_cfg)}")
         model_cfg["load_text_encoder"] = True
+        model_cfg["action_dit_pretrained_path"] = str(action_dit_path)
 
         # The final_A non-RTC checkpoint was trained with a newer config that
         # contains `rtc: {enabled: false}`. Older local runtime factories do not
@@ -442,6 +476,8 @@ def main() -> int:
     server = FastWAMActionServer(
         ckpt=args.ckpt,
         dataset_stats=args.dataset_stats,
+        dataset_dir=args.dataset_dir,
+        action_dit=args.action_dit,
         task=args.task,
         configs_dir=args.configs_dir,
         device=args.device,
@@ -450,6 +486,7 @@ def main() -> int:
         num_inference_steps=args.num_inference_steps,
         sigma_shift=args.sigma_shift,
         seed=args.seed,
+        cuda_memory_fraction=args.cuda_memory_fraction,
         instruction=args.instruction,
     )
     if args.self_test:
