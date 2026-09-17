@@ -7,6 +7,8 @@ DIST_ROOT="${REPO_ROOT}/deploy-all-on-4090/dist"
 STAGE_ROOT="${DIST_ROOT}/stage-$(date +%Y%m%d-%H%M%S)"
 CODE_STAGE="${STAGE_ROOT}/code/fastwam-load-giga"
 MODEL_STAGE="${STAGE_ROOT}/models/fastwam-load-giga"
+LATEST_CKPT="${LATEST_CKPT:-/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/checkpoints/weights/step_035000.pt}"
+ACTION_DIT="${ACTION_DIT:-${CODE_ROOT}/weights/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt}"
 
 mkdir -p "${CODE_STAGE}" "${MODEL_STAGE}" "${DIST_ROOT}"
 
@@ -40,10 +42,10 @@ rsync -a --delete \
   "${REPO_ROOT}/src/fastwam" \
   "${CODE_STAGE}/src/"
 
-rsync -a --delete \
-  "${CODE_ROOT}/weights" \
-  "${CODE_ROOT}/model_cache" \
-  "${MODEL_STAGE}/"
+mkdir -p "${MODEL_STAGE}/weights"
+rsync -a "${LATEST_CKPT}" "${MODEL_STAGE}/weights/step_035000.pt"
+rsync -a "${ACTION_DIT}" "${MODEL_STAGE}/weights/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt"
+rsync -a --delete "${CODE_ROOT}/model_cache" "${MODEL_STAGE}/"
 
 tar -C "${STAGE_ROOT}/code" -czf "${DIST_ROOT}/fastwam-load-giga-code.tar.gz" fastwam-load-giga
 tar -C "${STAGE_ROOT}/models" --use-compress-program "zstd -1 -T0" \

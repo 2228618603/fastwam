@@ -21,7 +21,7 @@ SRC_FALLBACK_ROOT = REPO_FALLBACK_ROOT / "src"
 
 FALLBACK_CKPT = Path(
     "/mnt/data/chw/fastwam/runs/agilex_empty_box_giga_init_bs8_8gpu_100k/"
-    "checkpoints/weights/step_015000.pt"
+    "checkpoints/weights/step_035000.pt"
 )
 FALLBACK_ACTION_DIT = Path(
     "/mnt/data/chw/fastwam/checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt"
@@ -31,7 +31,7 @@ FALLBACK_DATASET_DIR = Path(
     "/mnt/data/dataset/ei/huggingface/modanqing/agilex_empty_the_box_all_542_0711"
 )
 
-DEFAULT_CKPT = WEIGHTS_DIR / "step_015000.pt"
+DEFAULT_CKPT = WEIGHTS_DIR / "step_035000.pt"
 DEFAULT_ACTION_DIT = WEIGHTS_DIR / "ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt"
 DEFAULT_DATASET_STATS = ASSET_DIR / "train_stats.json"
 DEFAULT_CONTEXT = ASSET_DIR / "fixed_task_context.pt"

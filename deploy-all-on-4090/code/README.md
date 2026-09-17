@@ -348,7 +348,7 @@ action[13]    right gripper
 
 当前权重目录应包含：
 
-- `weights/step_015000.pt`
+- `weights/step_035000.pt`
 - `weights/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt`
 - `model_cache/Wan-AI/Wan2.2-TI2V-5B`
 - `model_cache/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors`

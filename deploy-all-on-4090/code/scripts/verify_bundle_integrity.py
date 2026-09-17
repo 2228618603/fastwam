@@ -19,7 +19,7 @@ REQUIRED_FILES = [
 ]
 
 REQUIRED_MODEL_FILES = [
-    "weights/step_015000.pt",
+    "weights/step_035000.pt",
     "weights/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt",
     "model_cache/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors",
 ]

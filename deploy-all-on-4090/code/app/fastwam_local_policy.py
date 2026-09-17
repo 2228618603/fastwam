@@ -120,7 +120,7 @@ class FastWAMLocalPolicy:
         self.ckpt_path = (
             Path(ckpt).expanduser()
             if ckpt
-            else prefer_packaged(DEFAULT_CKPT, prefer_packaged(PACKAGE_WEIGHTS_DIR / "step_015000.pt", FALLBACK_CKPT))
+            else prefer_packaged(DEFAULT_CKPT, prefer_packaged(PACKAGE_WEIGHTS_DIR / "step_035000.pt", FALLBACK_CKPT))
         )
         self.stats_path = Path(dataset_stats).expanduser() if dataset_stats else DEFAULT_DATASET_STATS
         self.context_path = Path(fixed_context).expanduser() if fixed_context else DEFAULT_CONTEXT
