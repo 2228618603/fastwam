@@ -1,0 +1,56 @@
+# 全量扫描：final_A 的 39 份 checkpoint，同一批样本，8 卡分片
+#
+#   source env.sh
+#   python scripts/offline_eval.py --config configs/eval/final_A_sweep.yaml
+#   python scripts/visualize_eval.py --sweep eval_offline/final_A_sweep
+#
+# 预计：joint 模式约 40 分钟（8 卡，每卡 5 个 ckpt × 64 样本）。
+# 想快速看趋势就把 inference.mode 改成 action（约 15 分钟，只出动作指标）。
+
+task: agilex_final_3cam_384_1e-4     # 决定模型结构与数据配置，必须与训练时一致
+out_dir: eval_offline/final_A_sweep
+
+# 权重全在 OSS（本地被 prune 掉了，只剩最后 3 份）。918 MB/s，单份约 13s，不必先拷回来。
+checkpoints:
+  - dir: /mnt/data/gaomeng/FastWAM/runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights
+    glob: "step_*.pt"
+    every: 1                         # 隔 N 个取一个；先试趋势可设 3
+
+highlight: [step_030000, step_068000, step_077690]   # 13_traj_overlay 用，最多 3 个
+reference: step_077690                              # 12_paired_delta 的基准（最终权重）
+
+dataset:
+  dataset_dir: ./data/agilex_empty_the_box_fastwam
+  split: val
+  # null = 沿用 val_set_proportion=0.01 的划分，也就是训练时那 5 个 episode
+  #        [36, 97, 449, 461, 136]，共 9,558 帧
+  # [36, 97] = 只评这两个
+  # "all"    = 全部 471 个 episode（注意会包含训练集，只适合做训练集拟合度检查）
+  episodes: null
+  # ⚠️ 必须与训练时同一份。用错统计量会让指标完全失真且**不报错**。
+  norm_stats: ./runs/_shared/dataset_stats.json
+
+sampling:
+  num_samples: 64                    # 在整个 split 上等间隔取，可复现
+  per_episode: null                  # 设成 16 则每 episode 各取 16 个，覆盖更均衡
+  stride: 0                          # >0 则按固定步长取，覆盖 num_samples 的取样方式
+  seed: 42                           # 扩散采样种子；也参与决定样本下标
+  skip_padded: true                  # 跳过 episode 末尾 32 帧的 padding 窗口
+                                     # （那里 GT 动作是复制填充的，误差会被人为压低）
+
+inference:
+  mode: joint                        # joint=动作+视频质量+可存 mp4；action=只动作(快很多)
+  num_inference_steps: 10            # 与 trainer 的 eval_num_inference_steps 一致，便于对比
+  sigma_shift: null                  # null=用模型配置里的值（video 5.0 / action 1.0）
+  save_video: true
+  action_crosscheck: true            # infer_joint 默认会额外跑一遍 infer_action 做校验，
+                                     # 与 trainer 一致；设 false 可省约 40% joint 耗时
+
+annotate:                            # 时间标注
+  steps_per_epoch: 15538             # 1 epoch = ceil(994426 / (8 bs × 8 卡))，见 task 配置
+  fps: null                          # null = 从数据集 meta/info.json 读（本数据是 30）
+  video_fps: null                    # null = fps / action_video_freq_ratio = 30/4 = 7.5
+
+runtime:
+  gpus: [0, 1, 2, 3, 4, 5, 6, 7]     # 按 ckpt 轮转分片；样本下标与分片无关，严格可比
+  overrides: []                      # 额外 hydra 覆盖，如 data.val.num_workers=4

@@ -1,0 +1,118 @@
+# @package _global_
+#
+# ============================================================================
+#  Training-Time RTC —— 从头训练 3 epoch（不是微调）
+# ============================================================================
+#
+#  与 agilex_rtc_3cam_384_1e-4.yaml 的区别：那份是从 final_A/step_032000 微调 4000 步
+#  （论文真机的做法）；这份是**纯 Wan2.2 初始化从头训练 3 epoch**，全程带 RTC 前缀条件。
+#
+#  论文与本配置的偏离（明知故犯，记录在此）：
+#    论文的做法是「先正常训练，再用前缀条件微调」——仿真是 32 epoch 里最后 8 epoch，
+#    真机是在未用前缀条件预训练的 base model 上微调 8,000 步。理由见论文 §6.3：
+#    RTC 把前缀位置的 loss mask 掉了，所以**前几个动作位置拿到的梯度总量始终少于普通训练**，
+#    论文实测 d=0,1 时「very marginally worse」。
+#
+#    从头全程带 RTC 训练，意味着这个「前几步监督偏少」的效应作用于**整个训练过程**，
+#    而不只是最后的微调阶段。缓解因素有两个：
+#      1. d 的分布包含 d=0（uniform[0,12) 里 1/12 的样本是纯无条件），无条件生成仍有监督
+#      2. 3 epoch = 46,614 步 x 64 样本 ≈ 3.0M 样本，总监督量是 1000 步验证跑的 46 倍
+#    但这条仍是**本配置最需要观察的风险**：判据是 rtc_seam_eval.py 的 postfix_L1
+#    能否收敛到 final_A 基线的 0.09 附近（1000 步微调版停在 0.23，差 2.5 倍）。
+#
+#  启动（8 卡）：
+#    source env.sh
+#    RUN_ID=rtc_scratch3ep bash scripts/train_zero1.sh 8 \
+#      task=agilex_rtc_scratch_3ep_3cam_384 \
+#      wandb.enabled=true wandb.project=fastwam-agilex wandb.name=rtc_scratch3ep
+#
+#  启动（4 卡，等效 batch 仍为 64，约慢 30%）：
+#    RUN_ID=rtc_scratch3ep bash scripts/train_zero1.sh 4 \
+#      task=agilex_rtc_scratch_3ep_3cam_384 \
+#      batch_size=4 gradient_accumulation_steps=4
+#
+#  ⚠️ 必须同步清理 checkpoint，否则打满磁盘：
+#    watch -n 600 'KEEP_STATE=1 KEEP_WEIGHTS=3 bash scripts/prune_ckpt.sh \
+#      runs/agilex_rtc_scratch_3ep_3cam_384/rtc_scratch3ep'
+# ============================================================================
+
+defaults:
+  - override /data: agilex_3cam
+  - override /model: fastwam
+  - _self_
+
+# ---------------- dataloading（与 final_A 一致，保证可比）----------------
+batch_size: 8            # 8 卡 zero1 实测峰值 76.2~78.3 GB，留约 3.6 GB 余量
+num_workers: 8
+
+model:
+  mot_checkpoint_mixed_attn: false   # 必须 false（mot.py:28-31 会抛错）
+  compile_training_denoise: false
+
+  rtc:
+    enabled: true
+
+    # d ∈ [0, 12) 即 {0..11}，30Hz 下覆盖到 367ms。
+    # 依据：A800 实测 infer_action 10 步去噪 mean=131ms / p99=203ms
+    #       -> d(mean)=3.9 / d(p99)=6.1 步，dryrun 建议 11~14，取 12。
+    # ⚠️ 部署机是 4090，上线前用 scripts/dryrun_fastwam.py --config-name sim_agilex 复测。
+    max_delay: 12
+
+    delay_distribution: uniform   # 论文真机做法；exp_decay 是论文仿真做法
+    execution_horizon: 8          # 只用于校验 max_delay-1 <= H - s = 32 - 8 = 24
+    prefix_jitter_std: 0.0        # 论文 §9.2 exposure bias 缓解，先关
+
+# ---------------- scheduler ----------------
+lr_scheduler_type: "cosine"
+
+# 从头训练用回 final_A 的峰值 lr（微调那份用的 2e-5 是因为不想扰动已收敛的模型）。
+# cosine 下限 = lr x 0.01 = 1e-6（硬编码 trainer.py:280）。
+learning_rate: 1e-4
+
+# 与 final_A 同为 2%：46,614 x 2% = 932 步。
+# 依据（AGILEX_TRAINING_PLAN.md）：ab_A 实测 250 步 warmup 在同样 lr=1e-4、等效 batch 64、
+# 同一 6.02B 模型下已经很稳（前 2000 步 loss 尖峰 0 次）；且 AdamW betas=(0.9,0.95)
+# 的 beta2 有效窗口只约 20 步，本就不需要长 warmup。932 步留了约 3.7 倍余量。
+warmup_ratio: 0.02
+
+# ✅ 生效。max_steps=null -> trainer 自己算（trainer.py:262-268）：
+#   micro_steps_per_epoch = ceil(994426 / (8 x 8)) = 15,538
+#   total = 15,538 x 3 = 46,614 步
+#
+# 预计 wall-clock：
+#   8 卡  final_A 实测 1,466 步/h -> 约 32 小时
+#   4 卡  bs=4 ga=4 实测 0.31 步/s = 1,116 步/h -> 约 42 小时
+#
+# ⚠️ 训练长度中途无法无损延长 —— warmup 长度与 cosine 衰减总长都由它决定。
+num_epochs: 3
+max_steps: null
+
+# ---------------- 日志 / 保存 ----------------
+log_every: 50
+eval_every: 500          # 46,614/500 = 93 个 eval 点
+                         # 注意：trainer.evaluate() 走 infer_joint 且 delay=0、不带前缀，
+                         # 所以它的 action_l1/l2 衡量的是**无条件生成**精度，
+                         # **测不到 RTC 要解决的接缝连续性**。接缝要用 rtc_seam_eval.py。
+
+# 46,614/2000 = 23 次保存 x 92 GB = 2.1 TB，而磁盘只有约 944 GB 可用。
+# **必须**配 scripts/prune_ckpt.sh 边训边清（留 1 份 state + 3 份 weights -> 稳态约 116 GB）。
+save_every: 2000
+
+# ---------------- training（与 final_A 一致）----------------
+gradient_accumulation_steps: 1
+weight_decay: 1e-2
+
+# ---------------- 从头训练：不热启动 ----------------
+# null = 纯 Wan2.2 初始化（video expert 从 Wan2.2-TI2V-5B，action expert 的 backbone 从
+# checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt，
+# 只有 action_encoder / head 是随机初始化——见 ActionDiT.ACTION_BACKBONE_SKIP_PREFIXES）。
+# 这与 final_A 的「A 方案」完全一致，所以两者可直接对比。
+resume: null
+
+# ---------------- 归一化统计量 ----------------
+# 必须与 final_A 用同一份，否则不可比。数据集沿用 471 episode 的那套。
+data:
+  train:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json
+  val:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json

@@ -1,0 +1,90 @@
+# final_D（具身视频预训练权重热启动）的离线评测 —— 与 final_A 用**同一批样本**
+#
+#   source env.sh
+#   python -u scripts/offline_eval.py --config configs/eval/final_D_newval71.yaml
+#   python scripts/visualize_eval.py --sweep eval_offline/final_D_newval71
+#
+# 与 `final_A_newval71.yaml` 逐字相同,只改 `checkpoints.dir` 与 `out_dir`。
+# 这是有意的:样本集、采样方式、seed、归一化统计、推理参数全部一致,
+# 才能把 final_D 的某个 step 与 final_A 的**同一个 step** 直接对上。
+#
+# ---------------------------------------------------------------------------
+#  为什么这个验证集对本实验是**必须**的
+# ---------------------------------------------------------------------------
+#  final_D 的 video expert 在 zzd 的 DiffSynth 预训练里见过**全部 471 条** episode,
+#  其中包含 FastWAM 的 val split `[36, 97, 136, 449, 461]`（`rng(42)` 切出的那 5 条）。
+#  所以训练期 eval 与 `eval_offline/final_A_sweep`（旧验证集）对 final_D 是**污染**的
+#  —— 那 5 条它背过,指标会被记忆抬高。
+#
+#  而 542 数据集新增的 71 条（471..541）:
+#    * 不在 FastWAM 训练集（final_A / final_D 都只用 471 条里的 466 条）
+#    * 不在 zzd 的预训练集（`agilex_emptybox_470_stitched_30fps/videos/` 只有 471 个 mp4,
+#      已核实逐条帧长与前 471 条一致,是纯增量）
+#  → 对两个 run **都**是干净的 held-out,是唯一能用来判优劣的集合。
+#
+#  ⚠️ 分布差异仍然存在:新增 episode 中位 4235 帧 vs 老数据平均 2131 帧,约 2 倍长。
+#     所以它同时在测「泛化到新数据」与「泛化到更长 episode」。这一点对 final_A 和
+#     final_D 是**同等**的,不影响两者的相对比较。
+#
+# ---------------------------------------------------------------------------
+#  final_A 的基准（已算好,`eval_offline/final_A_newval71/compare.csv`）
+# ---------------------------------------------------------------------------
+#  最优 `action_rmse` = **0.1934 @ step_032000**（epoch 2.06),与 step_028000 并列。
+#  step_028000 之后每一个 checkpoint 都**显著劣于**它（成对 Δ +0.004~+0.008）。
+#  final_D 要赢,就要在同一批 284 个样本上把这个数压下去。
+
+task: agilex_final_3cam_384_1e-4
+out_dir: eval_offline/final_D_newval71
+
+checkpoints:
+  # 本地只留最近 3 份（prune_ckpt.sh），全集在 OSS 上（autosync_daemon.sh 每 30 分钟同步）
+  - dir: /mnt/data/gaomeng/FastWAM/runs/agilex_final_3cam_384_1e-4/final_D/checkpoints/weights
+    glob: "step_*.pt"
+    every: 1
+
+# step_032000 = final_A 的最优点。用它当成对差分基准,读出来的 Δ 直接就是
+# 「final_D 的各 step 相对 final_D 自己在那个位置」的差异;跨 run 的比较另做（见文件头）。
+highlight: [step_002000, step_032000, step_077690]   # 早期 / final_A 最优点 / 最终
+reference: step_032000
+
+dataset:
+  # 转名后的 542 数据集（视频软链到只读源,零额外磁盘）
+  dataset_dir: ./data/agilex_empty_the_box_542_fastwam
+  split: val
+  # 显式指定新增的 71 条,避免 val_set_proportion 再去随机划分
+  episodes: [471, 472, 473, 474, 475, 476, 477, 478, 479, 480,
+             481, 482, 483, 484, 485, 486, 487, 488, 489, 490,
+             491, 492, 493, 494, 495, 496, 497, 498, 499, 500,
+             501, 502, 503, 504, 505, 506, 507, 508, 509, 510,
+             511, 512, 513, 514, 515, 516, 517, 518, 519, 520,
+             521, 522, 523, 524, 525, 526, 527, 528, 529, 530,
+             531, 532, 533, 534, 535, 536, 537, 538, 539, 540, 541]
+  # ⚠️ 必须仍用**训练时**那份统计量（final_A / final_D 共用同一份,配置里已钉死）。
+  #    换成新数据自己算的会让指标与 final_A_newval71 不可比。
+  norm_stats: ./runs/_shared/dataset_stats.json
+
+sampling:
+  # 每个 episode 等间隔取 4 个 -> 71 × 4 = 284 个样本。
+  # 必须与 final_A_newval71 逐字相同（含 seed）,否则两个 sweep 抽到的不是同一批窗口,
+  # 跨 run 的逐样本成对差分就失去意义。
+  per_episode: 4
+  num_samples: 284          # per_episode 生效时这项只作记录
+  stride: 0
+  seed: 42
+  skip_padded: true
+
+inference:
+  mode: joint
+  num_inference_steps: 10
+  sigma_shift: null
+  save_video: true
+  action_crosscheck: true
+
+annotate:
+  steps_per_epoch: 15538
+  fps: null
+  video_fps: null
+
+runtime:
+  gpus: [0, 1, 2, 3, 4, 5, 6, 7]
+  overrides: []

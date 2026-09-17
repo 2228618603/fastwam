@@ -1,0 +1,140 @@
+# @package _global_
+#
+# ============================================================================
+#  正式训练配置（Phase 7 / final_A）—— 与 A/B 短跑配置分开，参数全部显式写出
+# ============================================================================
+#
+#  A/B 短跑用的是 configs/task/agilex_uncond_3cam_384_1e-4.yaml（max_steps=5000）。
+#  这份是**正式训练**用的，所有值都来自 Phase 5 的实测，不再依赖命令行覆盖，
+#  便于审阅、复现和修改。
+#
+#  启动方式：
+#    source env.sh
+#    RUN_ID=final_A bash scripts/train_zero1.sh 8 \
+#      task=agilex_final_3cam_384_1e-4 \
+#      wandb.enabled=true wandb.project=fastwam-agilex wandb.name=final_A
+#    （dataset_stats 已在本文件末尾钉死，无需再从命令行传）
+#    -> 输出到 runs/agilex_final_3cam_384_1e-4/final_A/
+#
+# ----------------------------------------------------------------------------
+#  实测依据（详见 AGILEX_TRAINING_PLAN.md 的「执行记录」）
+# ----------------------------------------------------------------------------
+#  train 样本数        = 994,426 帧（窗口逐帧滑动，dataset 长度按帧计）
+#  等效 batch          = 8 (bs) x 8 (卡) x 1 (grad_accum) = 64 样本/step
+#  1 epoch             = 15,538 步；5 epoch = 77,690 步 ≈ 42 小时
+#  实测吞吐            = 32.8~33.0 样本/s -> 步时间约 1.95 s（含 eval 开销）
+#  1 epoch wall-clock  = 约 8.4 小时
+#
+#  显存探测（8xA800-80G，81920 MiB）：
+#    zero1 bs=8  峰值 76.2~78.3 GB  ok   <- 选这个，留约 3.6 GB 余量
+#    zero1 bs=12 峰值 79.7 GB      ok（仅剩 2.2 GB，多天训练风险太高）
+#    zero1 bs=16 OOM
+#    zero2 bs=16 / bs=24 均 OOM（瓶颈是激活值，不是优化器状态）
+#
+#  ⚠️ 梯度检查点不可用：mot.py:28-31 对 mot_checkpoint_mixed_attn=true 直接抛错。
+#     OOM 只能降 batch_size 或加 gradient_accumulation_steps。
+# ============================================================================
+
+defaults:
+  - override /data: agilex_3cam
+  - override /model: fastwam
+  - _self_
+
+# ---------------- dataloading ----------------
+batch_size: 8            # Phase 5c 实测：bs=12 只剩 2.2GB 余量，多天训练不值这个风险
+num_workers: 8           # 8 进程 x 8 = 64 workers + 8 主进程 = 72 < 80 核
+                         # 实测供给 11.9 样本/s/进程 vs 需求 5.55，余量 2.1 倍，非 IO-bound
+
+model:
+  mot_checkpoint_mixed_attn: false   # 必须 false（mot.py:28-31 会抛错，本实现不支持梯度检查点）
+  compile_training_denoise: false    # 可选加速约 10%，但会增加编译期不确定性，正式跑先不开
+
+# ---------------- scheduler ----------------
+lr_scheduler_type: "cosine"
+learning_rate: 1e-4      # 与官方 RoboTwin / LIBERO 一致
+                         # cosine 下限 = lr x 0.01 = 1e-6（硬编码 trainer.py:280）
+
+# warmup 从默认 5% 调到 2%（= 1,553 步 ≈ 50 分钟）。
+#
+# 依据是 ab_A 的实测：ab_A 的 warmup 只有 250 步（5% x 5000），在**完全相同**的
+# lr=1e-4、等效 batch 64、同一 6.02B 模型下训练非常稳：
+#     step  10  loss 2.344  lr 4.4e-06
+#     step 100  loss 0.723  lr 4.0e-05
+#     step 250  loss 0.602  lr 1.0e-04   <- warmup 结束，lr 达峰
+#   warmup 期间 loss 单调下降；前 2000 步内 loss 尖峰(单点涨幅>50%)次数 = 0
+#
+# 所以 250 步已经够；5% x 77,690 = 3,884 步是实证需求的约 15 倍。
+# 取 2%（1,553 步）仍留了 6 倍余量，足够保守。
+#
+# 另一佐证：AdamW 用 betas=(0.9, 0.95)（硬编码 trainer.py:100-105），beta2=0.95 的
+# 二阶动量有效窗口只有约 20 步（常见的 0.999 对应约 1000 步），本就不需要长 warmup。
+#
+# 想用绝对步数的话：注释掉 warmup_ratio，改设 warmup_steps: 1500
+warmup_ratio: 0.02
+
+num_epochs: 5            # ✅ 生效。因为下面 max_steps 设为 null，trainer 会自己算
+                         # （trainer.py:262-268）：
+                         #   micro_steps_per_epoch = ceil(994426 / (8 x 8)) = 15,538
+                         #   total = 15,538 x num_epochs = 77,690 步
+                         # 用 num_epochs 而不是硬写 max_steps 的好处：不会和 epoch
+                         # 的真实定义脱钩（数据集大小或 bs 变了会自动重算）。
+
+# null -> 由 num_epochs 推算（见上）。若要精确控制步数就在这里填具体值，
+# 它的优先级高于 num_epochs（trainer.py:255-256）。
+#
+# 当前 = 5 epoch = 77,690 步 ≈ 42 小时
+#   warmup      = 77,690 x 2% = 1,553 步
+#   cosine 终点 = 第 77,690 步，lr 衰减到 1e-6
+#
+# ⚠️ 训练长度**中途无法无损延长** —— warmup 长度与 cosine 衰减总长都由它决定。
+#    想改成别的 epoch 数，改上面的 num_epochs 后**重新开始**训练。
+max_steps: null
+
+# ---------------- 日志 / 保存 ----------------
+log_every: 50
+eval_every: 500          # 77,690/500 = 155 个 eval 点，足够看趋势
+                         # 每次 eval 每卡采 1 个 val 样本（trainer.py:437），共 8 个
+                         # 注：1.95s/step 的实测值是在 eval_every=250 下测的，
+                         # 这里放宽到 500，实际步时间会略优于该估计
+
+# Phase 5b 实测：单次保存 = weights 12GB + ZeRO state 80GB = 92GB。
+# 77,690/2000 = 38 次保存。必须配合 scripts/prune_ckpt.sh 清理，
+# 否则 38 x 92GB = 3.5TB 会打满共享磁盘（当前仅剩约 970GB，且其他用户在增长）。
+# 清理策略：只留最近 1 份 state + 3 份 weights -> 稳态占用约 116GB。
+#
+# 选 2000 而不是更大值的理由：这台机器是多人共享的，崩溃风险不低，
+# 2000 步 ≈ 65 分钟，即最坏情况只丢一小时工作量。
+# 每次保存阻塞约 80s，38 次共约 50 分钟，占 42 小时的 2%，可接受。
+save_every: 2000
+
+# ---------------- training ----------------
+gradient_accumulation_steps: 1
+weight_decay: 1e-2       # AdamW betas=(0.9, 0.95) 硬编码于 trainer.py:100-105
+
+# ============================================================================
+#  ⬇⬇ 本文件里**唯一**还未确定的一项 ⬇⬇
+# ============================================================================
+#  null            = A 方案（纯 Wan2.2 初始化）—— 当前默认，符合"主要训练 A"的意图
+#  robotwin...pt   = B 方案（热启动 RoboTwin 权重）
+#
+#  取值由 A/B 短跑结论决定（判读规则见 AGILEX_TRAINING_PLAN.md Phase 6）：
+#    B 在 loss_action 与 action_l2 上均优 ≥10% -> 改成下面那行注释掉的路径
+#    差距 <5% 或 B 更差                        -> 保持 null
+#
+#  另外：崩溃续训时改成 runs/.../checkpoints/state/step_XXXXXX（**目录**形式，
+#  恢复完整训练状态；文件形式只加载权重，trainer.py:320-327）
+resume: null
+# resume: ./checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt
+
+# ---------------- 归一化统计量（与 A/B 用同一份，保证完全可比）----------------
+# configs/data/agilex_3cam.yaml 里默认是 null（会重算，约 16s）。
+# 这里钉死成 A/B 共用的那份，原因：get_dataset_stats 用 ThreadPoolExecutor，
+# mean/var 的聚合顺序取决于 as_completed 的完成顺序，重算结果在末位比特上可能有
+# 极微差异。钉死同一份可确保 final_A 与 A/B 的归一化**逐比特一致**。
+#
+# ⚠️ 换数据集时必须改回 null（否则会用错误的统计量静默训练）。
+data:
+  train:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json
+  val:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json

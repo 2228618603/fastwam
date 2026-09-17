@@ -1,0 +1,103 @@
+_target_: fastwam.runtime.create_fastwam
+model_id: Wan-AI/Wan2.2-TI2V-5B
+tokenizer_model_id: Wan-AI/Wan2.1-T2V-1.3B
+tokenizer_max_len: 128
+load_text_encoder: false
+proprio_dim: ${data.train.processor.proprio_output_dim}
+redirect_common_files: true
+mot_checkpoint_mixed_attn: false
+compile_training_denoise: false
+action_dit_pretrained_path: checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt
+skip_dit_load_from_pretrain: false
+
+video_dit_config:
+  has_image_input: false
+  patch_size: [1, 2, 2]
+  in_dim: 48
+  hidden_dim: 3072
+  ffn_dim: 14336
+  freq_dim: 256
+  text_dim: 4096
+  out_dim: 48
+  num_heads: 24
+  attn_head_dim: 128
+  num_layers: 30
+  eps: 1.0e-06
+  seperated_timestep: true
+  require_clip_embedding: false
+  require_vae_embedding: false
+  fuse_vae_embedding_in_latents: true
+  use_gradient_checkpointing: ${model.mot_checkpoint_mixed_attn}
+  video_attention_mask_mode: "first_frame_causal" # default
+  action_conditioned: false
+  action_dim: ${data.train.processor.action_output_dim}
+  action_group_causal_mask_mode: "group_diagonal"
+
+action_dit_config:
+  action_dim: ${data.train.processor.action_output_dim}
+  hidden_dim: 1024
+  ffn_dim: 4096
+  num_heads: 24
+  attn_head_dim: 128
+  num_layers: 30
+  text_dim: 4096
+  freq_dim: 256
+  eps: 1.0e-06
+  use_gradient_checkpointing: ${model.mot_checkpoint_mixed_attn}
+
+video_scheduler:
+  train_shift: 5.0
+  infer_shift: 5.0
+  num_train_timesteps: 1000
+
+action_scheduler:
+  train_shift: 1.0
+  infer_shift: 1.0
+  num_train_timesteps: 1000
+
+loss:
+  lambda_action: 1.0
+
+# ============================================================================
+#  Training-time RTC —— 动作前缀条件（arXiv:2512.05964）
+# ============================================================================
+#  训练时随机采样一个模拟推理延迟 d，把 chunk 前 d 步当作「已知的干净动作前缀」喂给模型，
+#  只在后缀上算 loss。模型于是直接学到 p(A_{t+d:H} | o_t, A_{t:t+d})，推理时零额外开销
+#  （对比 inference-time RTC 的 pseudoinverse guidance 每个去噪步一次反向传播）。
+#
+#  ⚠️ 本仓库的 flow matching 约定与论文相反：sigma = timestep/1000，**sigma=0 是干净数据**。
+#     所以论文里「前缀 τ=1」在这里实现为 timestep=0（见 models/wan22/rtc.py）。
+#
+#  RTC **不增加任何参数**（adaLN 的 time_projection MLP 完全共享，只是 broadcast 维度从
+#  (B,6,C) 变成 (B,H,6,C)），所以可以直接在既有 checkpoint 上微调加装。
+#
+#  enabled=false（默认）时训练与推理都与原实现**逐比特一致**，
+#  可用 scripts/rtc_regression_check.py 校验。
+rtc:
+  enabled: false
+
+  # d 的采样上界，**半开区间**：d ∈ [0, max_delay)，对齐论文 Algorithm 1 的
+  # `jax.random.randint(rng, (b,), 0, max_delay)`。max_delay=12 -> d ∈ {0..11}。
+  # 这是最容易差一的地方。d=0 必须在支撑内，否则冷启动第一个 chunk 无法生成。
+  #
+  # agilex：30Hz（33.3ms/步），H=32。README 实测 action-only 推理 4090 约 110ms（LIBERO 配置，
+  # 98 video tokens/frame）；agilex 是 120 tokens/frame，预估 120~140ms -> 真实 d ≈ 4~5。
+  # 取 12（=367ms）留约 2 倍余量，符合论文「覆盖到 p99 的 1.5~2 倍」的建议。
+  # **换硬件 / 换去噪步数后应重新用 scripts/dryrun_fastwam.py 实测再定。**
+  max_delay: 12
+
+  # uniform   = 论文真机做法（Unif[0,10) 覆盖 200ms @ 50Hz）
+  # exp_decay = 论文仿真做法，权重 ∝ exp(-rate·d)，理由是「d 越大后缀越短、任务越简单、
+  #             需要的监督越少」，让小 d 拿到更多梯度
+  delay_distribution: uniform
+  exp_decay_rate: 0.5
+
+  # execution horizon s，**仅用于校验**论文的时序约束 d ≤ H - s，不参与训练计算。
+  # 与部署时的 replan_steps 保持一致（experiments/.../deploy_policy.yml 默认 8）。
+  # H=32, s=8 -> 最大可行 d = 24，当前 max_delay-1 = 11 远在约束内。
+  execution_horizon: 8
+
+  # 论文 §9.2 指出（论文本身没提）的 exposure bias 缓解：训练前缀来自数据集 GT，
+  # 推理前缀来自模型自生成，二者分布不匹配且沿 chunk 链递归累积。>0 时给前缀加高斯抖动。
+  # 默认 0 = 与论文完全一致。
+  prefix_jitter_std: 0.0

@@ -1,0 +1,79 @@
+# 用「训练集里抽的 64 条 episode」当评测集，跑全部 39 个 checkpoint
+#
+#   source env.sh
+#   python -u scripts/offline_eval.py --config configs/eval/final_A_train64.yaml
+#   python scripts/visualize_eval.py --sweep eval_offline/final_A_train64
+#
+# 输出目录与前两次分开，互不覆盖。
+#
+# ---------------------------------------------------------------------------
+#  这个测试是干什么用的
+# ---------------------------------------------------------------------------
+#  ⚠️ 这**不是**验证集 —— 这 64 条 episode 模型在训练中见过 5 遍（5 epoch）。
+#     它的误差是**训练集误差**，不反映泛化能力，单独看没有意义。
+#
+#  它的价值在于跟另外两套结果**做差**，把"过拟合"拆成两个可分辨的成因：
+#
+#    train64      = 见过 + 短 episode（本批采集）
+#    oldval5      = 没见过 + 短 episode（本批采集）   eval_offline/final_A_sweep
+#    newval71     = 没见过 + 长 episode（新批采集）   eval_offline/final_A_newval71
+#
+#    train64 vs oldval5   -> 纯记忆化差距（episode 长度与采集批次都相同，无混淆）
+#    oldval5 vs newval71  -> 采集批次 / episode 长度带来的分布偏移
+#
+#  再看这个差距**随训练步怎么变化**，就是标准的过拟合曲线：
+#  train 误差持续下降而 val 误差走平或转升 = 过拟合；两者同步下降 = 还能继续训。
+#
+#  这 64 条中位 1868 帧，与 oldval5 同批次同量级；newval71 中位 4235 帧，约 2 倍。
+
+task: agilex_final_3cam_384_1e-4
+out_dir: eval_offline/final_A_train64
+
+checkpoints:
+  - dir: /mnt/data/gaomeng/FastWAM/runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights
+    glob: "step_*.pt"
+    every: 1
+
+highlight: [step_002000, step_032000, step_077690]
+reference: step_077690
+
+dataset:
+  # 就是训练时读的那个目录
+  dataset_dir: ./data/agilex_empty_the_box_fastwam
+  split: val                # split 名在显式给 episodes 时不起作用，只影响 transforms
+  # 从 466 条**训练过的** episode 里等间隔取 64 条。
+  # 已排除训练时留出的 5 条 val（36, 97, 136, 449, 461）—— 混进来就不是纯训练集了。
+  # 生成方式：rng(42).shuffle(range(471)) 后取前 466 个为 train，再 linspace 取 64。
+  episodes: [0, 7, 14, 22, 29, 37, 45, 52, 60, 67,
+             74, 82, 89, 96, 105, 112, 120, 127, 134, 143,
+             150, 158, 165, 172, 180, 187, 194, 202, 209, 217,
+             224, 231, 239, 246, 253, 261, 268, 276, 283, 290,
+             298, 305, 313, 320, 327, 335, 342, 349, 357, 364,
+             372, 379, 386, 394, 401, 408, 416, 423, 431, 438,
+             445, 454, 462, 470]
+  # 必须仍是训练时那份，否则与另两套结果不可比
+  norm_stats: ./runs/_shared/dataset_stats.json
+
+sampling:
+  # 每 episode 取 4 个 -> 64 × 4 = 256 个样本，与 newval71 的 284 个同量级，直接可比
+  per_episode: 4
+  num_samples: 256          # per_episode 生效时这项只作记录
+  stride: 0
+  seed: 42
+  skip_padded: true
+
+inference:
+  mode: joint
+  num_inference_steps: 10
+  sigma_shift: null
+  save_video: true
+  action_crosscheck: true
+
+annotate:
+  steps_per_epoch: 15538
+  fps: null
+  video_fps: null
+
+runtime:
+  gpus: [0, 1, 2, 3, 4, 5, 6, 7]
+  overrides: []

@@ -1,0 +1,91 @@
+# FastWAM Agilex 双臂真机部署配置
+#
+#   source env.sh
+#   python scripts/deploy_real.py selfcheck --config configs/deploy/agilex_real.yaml
+#   python scripts/deploy_real.py benchmark --config configs/deploy/agilex_real.yaml
+#   python scripts/deploy_real.py run --config configs/deploy/agilex_real.yaml \
+#       --endpoint tcp://<机器人IP>:9900 --max-steps 60 --confirm
+#
+# 只需写要改的项,其余走 scripts/deploy_real.py 里的 DEFAULTS。
+# 设计依据与踩坑见 DEPLOY_DESIGN.md。
+
+task: agilex_final_3cam_384_1e-4
+
+# 离线评测在 71 个 held-out episode / 284 个相同样本上的推荐权重(NEXT_SESSION.md)。
+# 本地若已被 prune 掉,从 OSS 取回:
+#   W=/mnt/data/gaomeng/FastWAM/runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights
+#   cp $W/step_032000.pt runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights/
+checkpoint: ./runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights/step_032000.pt
+
+# ⚠️ 必须与训练时同一份,用错/缺失会让动作完全失真且**不报错**
+norm_stats: ./runs/_shared/dataset_stats.json
+
+# ⚠️ 必须与训练数据 meta/tasks.jsonl 里的**逐字一致** ——
+# T5 embedding 缓存是按 sha256(DEFAULT_PROMPT.format(task=...)) 找的,差一个字符就找不到。
+instruction: >-
+  Alternately use the left arm and the right arm to pick up the goods from the nearby box
+  and place them in the distant box, until the nearby box is empty.
+
+robot:
+  endpoint: tcp://127.0.0.1:9900     # 命令行 --endpoint 覆盖
+  recv_timeout_s: 30.0               # reset 服务端会 sleep 5s,别设太小
+  go_zero_on_exit: false             # true 会让双臂打到全零位,可能扫过工作区撞箱子
+  cameras:                           # 训练名 -> service 名
+    cam_high: cam_top                # ← service 叫 cam_top,训练叫 cam_high
+    cam_left_wrist: cam_left_wrist
+    cam_right_wrist: cam_right_wrist
+
+units:
+  # 夹爪满开度(米)。训练数据是 0~1 归一化值,service 两侧都用米。
+  # 已确认满开 = 0.07 m,故 frac = m / 0.07。
+  gripper_travel_m: 0.07
+
+inference:
+  device: cuda
+  num_inference_steps: 10            # 与离线评测一致。改了要先用 offline_eval 复测精度
+  sigma_shift: null
+  seed: null                         # null = 每次重新采噪声
+  action_horizon: null               # null -> num_frames-1 = 32 步 = 1.067 s
+  compile_action_infer: false
+  # CPU 线程数,**两个阶段要的值相反**(本机实测,80 核 A800,10 步去噪):
+  #   预处理(3 相机 resize + 拼图,CPU 小张量)  16 线程 -> 4~58 ms;80 线程 -> 290 ms
+  #   infer_action(去噪循环的 CPU 侧算子)       16 线程 -> 564 ms;80 线程 -> 413 ms
+  #   合计:定 16 = 622 ms,定 80 = 718 ms,**分阶段 = 416 ms**
+  # 0 = 不限(用满整机)。⚠️ 换机器/负载变了要重跑 benchmark 子命令。
+  torch_threads_pre: 16
+  torch_threads_infer: 0
+  # 跳过读底座 DiT(18.8 GB)+ ActionDiT(2.0 GB):checkpoint 的 mot 是 1649/1649 全覆盖,
+  # 读了立刻被覆写。已实测逐比特相同、动作 max|Δ|=0。VAE(1.4 GB)不受影响,仍必需。
+  # 这让最小部署集从 34.2 GB 降到 13.4 GB —— 见 DEPLOY_DESIGN.md 第 10 节。
+  skip_base_dit_load: true
+
+control:
+  mode: sync                         # sync(默认,只用 chunk 前 10 步)| async(连续但用第 13+ 步)
+  hz: 30.0                           # 必须等于数据集 fps=30,1 步 = 33.3 ms
+  replan_steps: 10                   # 交接文档建议 <=10:误差首步 1.4 度 -> 第 32 步 8.6 度
+  settle_steps: 3                    # sync 规划前驻留几步以取到"已稳定"的观测(100 ms)
+  max_steps: 0                       # 0 = 不限。第一次上真机先用命令行 --max-steps 60
+  num_episodes: 1
+
+safety:
+  enabled: true
+  # 下面两个来自训练数据实测的步间动作差分(60 episode / 129,762 转移),取 p99.9:
+  #   12 关节 p99=0.059 / p99.9=0.097 / max=0.815 rad(离群)
+  #   2 夹爪  p99=0.124 / p99.9=0.198
+  max_delta_joint: 0.10              # rad per 33.3ms ≈ 172 度/s
+  max_delta_gripper: 0.20            # 归一化分数 per 33.3ms
+  limit_margin_joint: 0.10           # 绝对限位 = 训练 action global_min/max ± 这个余量
+  limit_margin_gripper: 0.05
+  warn_first_step_jump: 0.15         # rad,超过只计数告警(由 delta 钳位吸收)
+  abort_first_step_jump: 0.60         # rad,超过直接中止 —— 通常意味着单位/映射/权重出错
+
+preflight:
+  start_pose_stats: auto             # auto = 统计并缓存到 runs/_shared/start_pose_stats.json
+  start_pose_episodes: 80
+  dataset_dir: null                  # null -> 用 task 配置里的
+  abort_on_gripper_out_of_range: true
+  gripper_range_margin: 0.15
+
+record:
+  dir: null                          # 命令行 --record-dir 覆盖;建议每次 rollout 都存
+  save_video: true                   # 存模型每次真正看到的 384x320 拼图

@@ -1,0 +1,98 @@
+# @package _global_
+#
+# ============================================================================
+#  Training-time RTC 微调 —— 从 final_A 的**终点** step_077690 出发，20,000 步
+# ============================================================================
+#
+#  与 agilex_rtc_3cam_384_1e-4.yaml（8,000 步、从 step_032000）的区别只有三项：
+#    resume       step_032000 -> step_077690
+#    max_steps    8,000       -> 20,000
+#    save_every   1,000       -> 2,000（10 个 checkpoint）
+#  其余（lr / rtc 参数 / batch / 数据 / norm_stats）完全一致，便于横向对比。
+#
+#  ⚠️ 起点的已知问题：`NEXT_SESSION.md` 记录 step_077690 是过拟合区间的终点，
+#     在 71-episode 新验证集上 rmse = 0.2009，比推荐的 step_032000（0.1454）**高 38%**。
+#     选它意味着从一个更差的父模型出发。缓解因素：20,000 步 x 64 = 1.28M 样本
+#     ≈ 1.29 epoch 的重训量很大，起点影响会被冲淡；且 nortc_ctrl8k 对照实测
+#     lr=2e-5 下继续训是在**改善**（action_l1 在 step 4500 达到 0.0772，优于其起点），
+#     并没有把模型推进过拟合。
+#
+#  启动（4 卡，GPU 4-7；等效 batch 仍为 64）：
+#    source env.sh
+#    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=4,5,6,7 \
+#    RUN_ID=rtc_from77690_20k bash scripts/train_zero1.sh 4 \
+#      task=agilex_rtc_from077690_20k \
+#      batch_size=4 gradient_accumulation_steps=4
+#
+#  ⚠️ 必须同步清理（只清 ZeRO state，weights 全留 -> 稳态约 200 GB）：
+#    watch -n 900 'KEEP_STATE=1 KEEP_WEIGHTS=99 bash scripts/prune_ckpt.sh \
+#      runs/agilex_rtc_from077690_20k/rtc_from77690_20k'
+# ============================================================================
+
+defaults:
+  - override /data: agilex_3cam
+  - override /model: fastwam
+  - _self_
+
+batch_size: 8            # 8 卡用这个；4 卡请命令行覆盖成 batch_size=4 gradient_accumulation_steps=4
+num_workers: 8
+
+model:
+  mot_checkpoint_mixed_attn: false
+  compile_training_denoise: false
+
+  rtc:
+    enabled: true
+    max_delay: 12
+    # ⚠️ 仍用 uniform，与已完成的 rtc_paper8k / nortc_ctrl8k 保持可比。
+    #
+    #    但已有证据表明 uniform 在早期位置会「饿死」监督（论文 §6.3 的机制）：
+    #    d ~ uniform[0,12) 下第 k 步拿到 loss 监督的概率是 (k+1)/12，
+    #    第 0 步只有 8%。而实测误差倍数随监督概率单调下降：
+    #        k=0  P(sup)=0.08  RTC/基线 = 2.92x
+    #        k=11 P(sup)=1.00  RTC/基线 = 1.78x
+    #        k=28 P(sup)=1.00  RTC/基线 = 1.22x
+    #
+    #    exp_decay(0.5) 会把第 0 步的监督概率从 0.08 提到 0.39（第 2 步 0.25 -> 0.78），
+    #    且仍覆盖到 d=11 —— 这正是论文**仿真**用的分布。若要对症解决 starvation，
+    #    把下面一行改成 exp_decay 即可（代价：与前两个 run 不再逐项可比）。
+    delay_distribution: uniform
+    exp_decay_rate: 0.5
+    execution_horizon: 8   # 只用于校验 max_delay-1=11 <= H - s = 32 - 8 = 24
+    prefix_jitter_std: 0.0
+
+lr_scheduler_type: "cosine"
+learning_rate: 2e-5       # 与 rtc_paper8k / nortc_ctrl8k 一致，保证三者可比
+
+# 2% x 20,000 = 400 步。依据同 final_A：ab_A 实测 250 步在同 lr 下已足够稳，
+# 且 AdamW betas=(0.9,0.95) 的 beta2 有效窗口只约 20 步，不需要长 warmup。
+warmup_steps: 400
+
+# 20,000 步 x 64 样本 = 1.28M 样本 ≈ 1.29 epoch。
+# 实测吞吐：4 卡 bs=4 ga=4 约 1,096 步/h -> 约 18.3 小时
+#           8 卡 bs=8 ga=1 约 1,466 步/h -> 约 13.6 小时
+#
+# ⚠️ 训练长度中途无法无损延长 —— warmup 与 cosine 衰减总长都由它决定。
+max_steps: 20000
+num_epochs: 1             # 被 max_steps 覆盖（trainer.py:255-256）
+
+log_every: 50
+eval_every: 500           # 40 个 eval 点
+                          # ⚠️ trainer.evaluate() 走 delay=0 不带前缀，衡量的是**无条件生成**，
+                          #    测不到 RTC 要解决的接缝连续性。接缝用 scripts/rtc_seam_eval.py。
+save_every: 2000          # 10 个 checkpoint。weights 12GB x10 = 120GB + 1 份 state 80GB
+                          # = 稳态约 200GB（配 prune_ckpt.sh）。不清理的话
+                          # 10 x 92GB = 920GB 会打满磁盘。
+
+gradient_accumulation_steps: 1
+weight_decay: 1e-2
+
+# final_A 的**终点**（epoch 5 / 77,690 步）。文件形式 -> 只加载权重，
+# optimizer/scheduler/step 全新（trainer.py:320-327），正是微调想要的。
+resume: ./runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights/step_077690.pt
+
+data:
+  train:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json
+  val:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json

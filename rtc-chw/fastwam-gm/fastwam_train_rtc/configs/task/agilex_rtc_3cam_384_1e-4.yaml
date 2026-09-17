@@ -1,0 +1,131 @@
+# @package _global_
+#
+# ============================================================================
+#  Training-time RTC 微调（从 final_A/step_032000 加装动作前缀条件）
+# ============================================================================
+#
+#  论文：arXiv:2512.05964，中文解读见 RTCtrain_论文解读.md
+#  设计与实施方案见 /root/.claude/plans/adaptive-snuggling-wombat.md
+#
+#  为什么是「微调」而不是从头重训：
+#    RTC **不增加任何参数**（adaLN 的 time_projection 完全共享，只是 broadcast 维度变了），
+#    所以可以直接在既有 checkpoint 上加装。论文真机实验正是这么做的 —— 在一个
+#    **没有用前缀条件预训练过**的 π0.6 base model 上微调 8,000 步（batch 512）。
+#
+#  启动方式：
+#    source env.sh
+#    RUN_ID=rtc_A bash scripts/train_zero1.sh 8 \
+#      task=agilex_rtc_3cam_384_1e-4 \
+#      wandb.enabled=true wandb.project=fastwam-agilex wandb.name=rtc_A
+#    -> 输出到 runs/agilex_rtc_3cam_384_1e-4/rtc_A/
+#
+#  与 final_A 保持完全可比的三件事（不要动）：
+#    1. 同一份 dataset_stats（./runs/_shared/dataset_stats.json）
+#    2. 同一个数据集（471 episode 的 agilex_empty_the_box_fastwam）
+#    3. 同样的 batch_size=8 / grad_accum=1 / weight_decay=1e-2
+# ============================================================================
+
+defaults:
+  - override /data: agilex_3cam
+  - override /model: fastwam
+  - _self_
+
+# ---------------- dataloading（与 final_A 一致）----------------
+batch_size: 8
+num_workers: 8
+
+model:
+  mot_checkpoint_mixed_attn: false   # 必须 false（mot.py:28-31 会抛错）
+  compile_training_denoise: false
+
+  # ---------------- 本文件的核心开关 ----------------
+  rtc:
+    enabled: true
+
+    # d ∈ [0, 12) 即 {0..11}，30Hz 下覆盖到 367ms。
+    # ⚠️ 训练前先跑一遍延迟基准确认这个值：
+    #     python scripts/dryrun_fastwam.py --config-name sim_agilex \
+    #       ckpt=<step_032000.pt> +DRYRUN.use_random_context=true \
+    #       +DRYRUN.compile_action_infer=true +DRYRUN.warmup=10 +DRYRUN.iters=200
+    #   然后按 max_delay = ceil(1.5~2 x p99 / 33.3ms) 调整。
+    max_delay: 12
+
+    # uniform = 论文真机做法。想试论文仿真的 exp_decay 就把这里改掉（小 d 拿更多监督）。
+    delay_distribution: uniform
+
+    # 与部署 replan_steps 一致；只用于校验 max_delay-1 <= H - s = 32 - 8 = 24。
+    execution_horizon: 8
+
+    # 论文 §9.2 的 exposure bias 缓解，先保持 0（与论文一致）。
+    # 若接缝评测显示模型对自生成前缀敏感，再试 0.01~0.05。
+    prefix_jitter_std: 0.0
+
+# ---------------- scheduler ----------------
+lr_scheduler_type: "cosine"
+
+# ⚠️ 本文件最需要事后调整的两个数：learning_rate 与 max_steps。
+#
+# lr = 2e-5 = final_A 峰值 1e-4 的 0.2 倍。理由：
+#   这是「加装一个新的条件分布」，不是继续拟合数据。NEXT_SESSION.md 已确认
+#   **final_A 后期是真实过拟合、动作分支也在退化**，step_032000（epoch 2.06）是推荐点。
+#   用峰值 lr 继续训会把模型推回过拟合区，抵消 RTC 的收益。
+learning_rate: 2e-5
+
+# 200 步 warmup（AdamW betas=(0.9,0.95) 硬编码于 trainer.py:100-105，
+# beta2=0.95 的有效窗口只约 20 步，本就不需要长 warmup；ab_A 实测 250 步已足够稳）。
+warmup_steps: 200
+
+# 8000 步 x 64 样本/步 = 512k 样本 ≈ 0.51 epoch。4 卡约 7.2 小时。
+# 与论文真机的 8,000 步（batch 512）对齐**步数**；样本量是论文的 1/8。
+#
+# ⚠️ 这个值原本是 4000，改成 8000 的依据是 2026-09-01 实测（1000 步退火版，
+#    rtc_short1k，见 RTC_TRAIN_DESIGN.md）：
+#
+#      指标                     final_A/step_032000  RTC@500  RTC@1000
+#      seam_ratio (d=4)              6.41             1.83     1.50   ✅ 已达标
+#      postfix_L1 (物理量)           0.090            0.277    0.228  ❌ 差 2.5x
+#      traj_accel_median             3.59             9.81     7.91   ❌ 差 2.2x
+#
+#    结论：**接缝连续性 1000 步就修好了**（seam_ratio 6.41 -> 1.50，接近 1 = 与普通
+#    相邻步无异），但绝对精度还在收敛的瞬态里 —— postfix_L1 与 traj_accel_median
+#    在 500 -> 1000 之间都还在单调下降，且训练侧 loss_action 一路降到 0.12 未见平台。
+#    所以瓶颈不是「学不动前缀条件」，而是「模型还没在新输入语义下重新收敛」。
+#
+# 判据：postfix_L1 能否回到基线 0.09 附近，同时 seam_ratio 保持在 1.5 左右。
+# 若 8000 步后 postfix_L1 仍 >0.15，再考虑 12,000~19,400 步
+# （论文仿真的等比算力 = final_A 77,690 步的 25% ≈ 19,400），但要注意
+# NEXT_SESSION.md 已证实 final_A 后期是真实过拟合，步数越长越要靠扫 ckpt 挑点。
+max_steps: 8000
+num_epochs: 1     # 被 max_steps 覆盖（trainer.py:255-256 优先用 max_steps）
+
+# ---------------- 日志 / 保存 ----------------
+log_every: 50
+eval_every: 500   # 8000/500 = 16 个 eval 点
+                  # ⚠️ trainer.evaluate() 走 infer_joint 且 delay=0、不带前缀，所以它的
+                  #    action_l1/l2 衡量的是**无条件生成**精度，测不到 RTC 要解决的接缝连续性。
+                  #    接缝必须用 scripts/rtc_seam_eval.py 单独评。
+save_every: 1000  # 8 个 checkpoint 可扫。weights 12GB x8 = 96GB，ZeRO state 80GB/份。
+                  # 必须边训边清（只清 state，weights 全留）：
+                  #   watch -n 600 'KEEP_STATE=1 KEEP_WEIGHTS=99 \
+                  #     bash scripts/prune_ckpt.sh runs/agilex_rtc_3cam_384_1e-4/<RUN_ID>'
+                  # 稳态占用 ≈ 96 + 80 = 176 GB
+
+# ---------------- training（与 final_A 一致）----------------
+gradient_accumulation_steps: 1
+weight_decay: 1e-2
+
+# ---------------- 热启动权重 ----------------
+# **文件**形式 -> 只加载权重，optimizer/scheduler/step 全新（trainer.py:320-327），
+# 正是微调想要的。目录形式才是续训。
+#
+# step_032000 是 final_A 在两套验证集上扫出来的推荐点（见 NEXT_SESSION.md）。
+# 本地只剩 step_074000/076000/077690，这份要从 OSS 读；想加快启动可先 cp 到本地。
+resume: /mnt/data/gaomeng/FastWAM/runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights/step_032000.pt
+
+# ---------------- 归一化统计量 ----------------
+# 必须与 final_A 用同一份，否则两者不可比（详见 agilex_final_3cam_384_1e-4.yaml 的说明）。
+data:
+  train:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json
+  val:
+    pretrained_norm_stats: ./runs/_shared/dataset_stats.json

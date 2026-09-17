@@ -1,0 +1,18 @@
+{
+  "deploy/robot_server.py": "5f46e413b068a0f23029ff0cea997f8716db707baf8dd965cceb281bfbdbef83",
+  "deploy/robot_client.py": "36ee0de9abbac3beb91144037dbf8f7cf76e9cbbac3814af45f9f1406beddaf0",
+  "deploy/start_server_aligned_python.sh": "a7aa8841b77eafbfe5146a6f20e25f16520e69d25dbbc1825404b86e74b0e872",
+  "deploy/start_client.sh": "528a8982c752291213306f631c6956e241c26c3b09eab7d1f3c1bba333e311d5",
+  "deploy/goto_start.py": "0f0fe6da17fd7af047ffbd078619b23ac6769c38fce514a3860f7e54deae1d8e",
+  "deploy/test_rtc_optimizations.py": null,
+  "scripts/inference_openloop.py": "7e77feb28934923aedc78ca125bc84249a7ab74f02d18561b1074303139846dc",
+  "world_action_model/models/transformer_wa_casual_mot.py": "5fd624b5215bb1f7af14154e9f3a9e7826f11b2eb036033ed56fdab71b6dccf9",
+  "README_RTC_ENGINEERING_OPTIMIZATIONS.md": null,
+  "start_client_local_log_only.sh": null,
+  "start_rtc30k_python_server.sh": null,
+  "start_rtc_client_async.sh": null,
+  "start_rtc_client_closed_loop.sh": null,
+  "start_rtc_client_goto_start.sh": null,
+  "start_rtc_client_log_only.sh": null,
+  "start_rtc_client_step.sh": null
+}

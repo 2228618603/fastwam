@@ -1,0 +1,58 @@
+# @package _global_
+#
+# 延迟基准 / 单机推理用的 agilex 配置（对应 configs/sim_libero.yaml，无仿真环境部分）。
+#
+# 用途：用 scripts/dryrun_fastwam.py 实测 infer_action 的端到端延迟，
+# 以此确定 model.rtc.max_delay（论文 L2：训练时的延迟分布必须基于预期推理延迟来定）。
+#
+#   python scripts/dryrun_fastwam.py --config-name sim_agilex \
+#     ckpt=/mnt/data/gaomeng/FastWAM/runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights/step_032000.pt \
+#     +DRYRUN.use_random_context=true +DRYRUN.compile_action_infer=true \
+#     +DRYRUN.warmup=10 +DRYRUN.iters=200
+#
+# 拿到 p99 后：max_delay = ceil(1.5~2 x p99 / (1000/30) ms)
+#
+# 也可以对比前缀路径的开销（应当为零 —— 循环里只有 forward，没有 VJP）：
+#     +DRYRUN.delay=5
+#
+# ⚠️ load_text_encoder: false —— 4090 只有 24GB，装不下 6.02B 模型 + umT5 文本编码器。
+#    配 +DRYRUN.use_random_context=true 用随机 context 代替；真实部署时用预计算的
+#    text embeds（data/text_embeds_cache/agilex）。
+
+defaults:
+  - train
+  - override /task: agilex_final_3cam_384_1e-4
+  - _self_
+
+ckpt: null
+gpu_id: 0
+
+model:
+  load_text_encoder: false
+  # 基准只测速，不需要 ActionDiT backbone 的真实初始化（ckpt 会覆盖全部 mot 权重）。
+  # 想严格复现部署时的权重就把这两行删掉并提供真实 ckpt。
+  skip_dit_load_from_pretrain: true
+  action_dit_pretrained_path: null
+
+EVALUATION:
+  # 与部署一致：replan_steps 就是论文里的 execution horizon s
+  replan_steps: 8
+
+  action_horizon: null
+  num_inference_steps: ${eval_num_inference_steps}
+  sigma_shift: null
+  text_cfg_scale: 1.0
+  negative_prompt: ""
+  rand_device: cpu
+  tiled: false
+  compile_action_infer: true
+
+  dataset_stats_path: ./runs/_shared/dataset_stats.json
+  device: cuda
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

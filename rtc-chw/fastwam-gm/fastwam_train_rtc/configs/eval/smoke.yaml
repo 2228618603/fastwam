@@ -1,0 +1,33 @@
+# 链路自检：1 个本地 ckpt、2 个样本、只出动作指标、单卡。约 2 分钟。
+# 放量前先跑这个 —— 数据集与模型构建、权重校验、反归一化、落盘全都会走一遍。
+#
+#   source env.sh
+#   python scripts/offline_eval.py --config configs/eval/smoke.yaml
+
+task: agilex_final_3cam_384_1e-4
+out_dir: /tmp/eval_smoke
+
+checkpoints:
+  - runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights/step_077690.pt
+
+dataset:
+  dataset_dir: ./data/agilex_empty_the_box_fastwam
+  split: val
+  episodes: null
+  norm_stats: ./runs/_shared/dataset_stats.json
+
+sampling:
+  num_samples: 2
+  seed: 42
+  skip_padded: true
+
+inference:
+  mode: action                       # 不解 VAE，快
+  num_inference_steps: 10
+  save_video: false
+
+annotate:
+  steps_per_epoch: 15538
+
+runtime:
+  gpus: [0]

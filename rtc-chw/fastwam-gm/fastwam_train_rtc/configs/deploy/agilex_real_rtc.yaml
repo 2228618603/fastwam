@@ -1,0 +1,148 @@
+# FastWAM Agilex 真机部署配置 —— Training-time RTC 版本
+#
+# 与 agilex_real.yaml（非 RTC，sync 模式）**完全并列**，互不影响：
+#   非 RTC 部署  configs/deploy/agilex_real.yaml       task=agilex_final_...  rtc.enabled=false
+#   RTC 部署     configs/deploy/agilex_real_rtc.yaml   task=agilex_rtc_...    rtc.enabled=true
+# 代码只有一份（scripts/deploy_real.py），RTC 路径由 `rtc.enabled` 门控；
+# 关掉时不走任何 RTC 代码，与既有部署逐比特一致。
+#
+#   source env.sh
+#   # 0) 无硬件：先验证 RTC 前缀链路（时序对齐 / delay 预估 / clamp 生效）
+#   python scripts/deploy_real.py rtc-check  --config configs/deploy/agilex_real_rtc.yaml
+#   # 1) 无硬件：预处理与训练逐元素一致
+#   python scripts/deploy_real.py selfcheck  --config configs/deploy/agilex_real_rtc.yaml
+#   # 2) 无硬件：实测延迟，据此定 rtc.fixed_delay / latency_percentile
+#   python scripts/deploy_real.py benchmark  --config configs/deploy/agilex_real_rtc.yaml
+#   # 3) 真机小步试
+#   python scripts/deploy_real.py run --config configs/deploy/agilex_real_rtc.yaml \
+#       --endpoint tcp://<机器人IP>:9900 --max-steps 60 --confirm
+#
+# 原理见 RTCtrain_论文解读.md；实现与实测见 RTC_TRAIN_DESIGN.md；部署踩坑见 DEPLOY_DESIGN.md。
+
+# ⚠️ 必须是带 RTC 训练的 task —— 它的 model.rtc.enabled=true，脚本会交叉校验。
+#    用非 RTC 的 task 配 rtc.enabled=true 会被直接拒绝（模型没见过前缀条件）。
+task: agilex_rtc_3cam_384_1e-4
+
+# 8000 步 RTC 微调（从 final_A/step_032000 加装前缀条件）的终点。
+# 依据（32 样本 seam eval，exec_window=8，见 RTC_TRAIN_DESIGN.md）：
+#   d=8 时 seam_ratio 0.946（基线 6.40）—— 接缝在统计上已不可见
+#   d=4 时 seam_accel 6.16（基线 23.39）—— 绝对接缝加速度降 3.8 倍
+# ⚠️ 但执行窗口内关节误差 9.3~9.8 度 vs 基线 3.6~5.0 度，**精度差约 2.4 倍**。
+#    这个退化在 d=0（不走前缀路径）时同样存在（6.02 vs 2.67 度），所以怀疑主因是
+#    「从已过拟合的 step_032000 再走 8000 步」而非 RTC 本身 —— 非 RTC 的 8000 步对照
+#    跑完才能定论。**上真机前请先确认那个对照的结论。**
+checkpoint: ./runs/agilex_rtc_3cam_384_1e-4/rtc_paper8k/checkpoints/weights/step_008000.pt
+
+norm_stats: ./runs/_shared/dataset_stats.json
+
+instruction: >-
+  Alternately use the left arm and the right arm to pick up the goods from the nearby box
+  and place them in the distant box, until the nearby box is empty.
+
+robot:
+  endpoint: tcp://127.0.0.1:9900
+  recv_timeout_s: 30.0
+  go_zero_on_exit: false
+  cameras:
+    cam_high: cam_top
+    cam_left_wrist: cam_left_wrist
+    cam_right_wrist: cam_right_wrist
+
+units:
+  gripper_travel_m: 0.07
+
+inference:
+  device: cuda
+  num_inference_steps: 10
+  sigma_shift: null
+  seed: null
+  action_horizon: null
+  # RTC 下 timestep 形状恒为 [1,32]，delay 只改数值不改形状，所以 compile 不会因 d 变化
+  # 重编译。但 delay=0 走 1-D、delay>0 走 2-D，是两张图（冷启动第一个 chunk 是 d=0）。
+  compile_action_infer: true
+  # compile_mode 的取值**取决于用哪套部署脚本**，因为 CUDA Graph Trees 的状态是线程局部的
+  # （cudagraph_trees.py:277-292 + 325 的 assert）。本机实测(torch 2.7.1+cu128)的精确规则是
+  # 「必须从头到尾同一个线程」，而不是「必须主线程」：
+  #     ✅ 专属线程首次 compile+record、之后一直用它     -> 正常，且最快
+  #     ❌ 一个线程先 record，再换另一个线程 record 新图  -> AssertionError
+  #     ⚠️ 一个线程 record、另一个线程 replay 同一张图     -> 不报错但原线程后续劣化
+  #
+  #   ● 拆分部署(**推荐**，scripts/fastwam_server.py + fastwam_client.py)：
+  #       推理独占一个专属线程(InferenceThread)，编译/预热/每次推理全在它上面
+  #       -> **可以用 reduce-overhead**，CUDA Graphs 生效(实测比 default 快 2.4 倍)。
+  #       起服务时用命令行覆盖即可：--compile-mode reduce-overhead --warmup-rtc
+  #       或直接 bash scripts/start_server.sh(已经写好了)。
+  #
+  #   ● 单进程部署(scripts/deploy_real.py control.mode=async)：
+  #       它的预热池与推理池是两个不同线程(deploy_real.py:730 vs 740)，正好落在 ❌ 上，
+  #       所以**必须留在 default**；EpisodeRunner 启动时有守卫会拦住 reduce-overhead。
+  #
+  # 这里保守地填 default，让**两套脚本都能直接用这个 yaml 而不会崩**；
+  # 拆分部署那边由 start_server.sh 覆盖成 reduce-overhead。
+  #
+  # 为什么 RTC 特别在意这个:不开 compile 的话 30Hz 下 d 会远超训练覆盖的 d<=11,
+  # 前缀条件形同虚设(overrun 接近 100%)。实测(4090/20 核,5 步去噪)：
+  #     无 compile            383 ms -> d=11.5  撞上限
+  #     compile default       164 ms -> d≈5     可用
+  #     compile reduce-overhead 73 ms -> d≈2.2  最好(需拆分部署)
+  # 换机器务必实测：python scripts/fastwam_server.py --config <本文件> \
+  #                   --benchmark --compile-mode both --steps-list 5,10
+  compile_mode: default
+  torch_threads_pre: 16
+  torch_threads_infer: 0
+
+# ── RTC 前缀条件 ──────────────────────────────────────────────────────────────
+rtc:
+  enabled: true
+
+  # measured = 用最近 latency_window 次推理耗时的分位数换算成控制步。
+  # 论文相对 inference-time RTC 的主要增益之一就是「d 是运行时输入，不必保守估计」，
+  # 因为训练时已经见过整个 d 分布（uniform[0,12)）。所以默认用实测而非固定值。
+  delay_mode: measured
+  fixed_delay: 5          # 冷启动（还没有实测样本）时用；也是 delay_mode=fixed 时的取值
+
+  # 取 p90 而不是中位数：d 估**小**了会让切入点落在前缀之外，那几步失去连续性保护
+  # （运行时会打印 "前缀 overrun" 计数）；估大了只是多冻结一两步，代价小得多。
+  latency_percentile: 0.9
+  latency_window: 20
+
+  min_delay: 1
+  # 上限 11 = 训练时 max_delay(12) - 1，模型没见过更大的 d。
+  # 同时要满足论文的时序约束 d <= H - s = 32 - replan_steps。
+  max_delay: 11
+
+control:
+  # ⚠️ 必须 async —— RTC 前缀条件的前提是 chunk 之间有重叠。
+  #    sync 每次都从静止重新规划、没有重叠，脚本会警告并忽略 RTC。
+  mode: async
+  hz: 30.0
+  # ⚠️ async 下 replan_steps **完全未被使用** —— run_async 不引用 self.replan（只有 run_sync
+  #    用它）。async 的执行长度是涌现的：推理落地时从第 elapsed 步切入，下一次推理立刻发起，
+  #    所以每个 chunk 实际执行约 elapsed 步、区间 [elapsed, 2*elapsed)，即 s ≈ d。
+  #    这里保留它只为切回 sync 时有值可用。
+  replan_steps: 10
+  settle_steps: 3         # async 不用（不驻留），保留以便切回 sync 对比
+  max_steps: 0
+  num_episodes: 1
+
+safety:
+  enabled: true
+  max_delta_joint: 0.10
+  max_delta_gripper: 0.20
+  limit_margin_joint: 0.10
+  limit_margin_gripper: 0.05
+  # ⚠️ RTC 的卖点就是压低接缝跳变，所以首步跳变应当比非 RTC **更小**。
+  #    如果这里频繁告警，说明前缀条件没生效（查 rtc-check 与 overrun 计数）。
+  warn_first_step_jump: 0.15
+  abort_first_step_jump: 0.60
+
+preflight:
+  start_pose_stats: auto
+  start_pose_episodes: 80
+  dataset_dir: null
+  abort_on_gripper_out_of_range: true
+  gripper_range_margin: 0.15
+
+record:
+  dir: null
+  save_video: true

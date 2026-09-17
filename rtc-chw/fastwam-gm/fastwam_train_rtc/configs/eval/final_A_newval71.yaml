@@ -1,0 +1,75 @@
+# 用「新增的 71 条 episode」当验证集，重跑全部 39 个 checkpoint
+#
+#   source env.sh
+#   python -u scripts/offline_eval.py --config configs/eval/final_A_newval71.yaml
+#   python scripts/visualize_eval.py --sweep eval_offline/final_A_newval71
+#
+# 与 final_A_sweep.yaml 的唯一区别是验证集，输出目录也分开，互不覆盖。
+#
+# ---------------------------------------------------------------------------
+#  这个验证集为什么更有说服力
+# ---------------------------------------------------------------------------
+#  542 数据集 = 471（训练用的那份）+ 71 条新增，已核实前 471 条逐条长度完全一致，
+#  是纯增量。训练只用到了 471 条里的 466 条，所以 471..541 这 71 条
+#  **从未被模型见过**，是真正的 held-out。
+#
+#  原来的 val split 只有 5 个 episode（val_set_proportion=0.01），已经证明
+#  区分不出 step_014000 之后的任何 checkpoint（39 个里 27 个与最优无显著差异）。
+#
+#  ⚠️ 但要注意分布差异：新增 episode 明显更长（中位 4235 帧 vs 老数据平均 2131），
+#     约 2 倍。可能是不同批次/操作员/箱内物品数不同。所以这里同时在测
+#     「泛化到新数据」和「泛化到更长的 episode」，两者混在一起。
+#     如果这里的误差明显高于 final_A_sweep，先怀疑分布差异，别直接归因于过拟合。
+
+task: agilex_final_3cam_384_1e-4
+out_dir: eval_offline/final_A_newval71
+
+checkpoints:
+  - dir: /mnt/data/gaomeng/FastWAM/runs/agilex_final_3cam_384_1e-4/final_A/checkpoints/weights
+    glob: "step_*.pt"
+    every: 1
+
+highlight: [step_002000, step_032000, step_077690]   # 早期 / 最优 / 最终
+reference: step_077690
+
+dataset:
+  # 转名后的 542 数据集（视频是软链接到 /mnt/data 的只读源，零额外磁盘）
+  dataset_dir: ./data/agilex_empty_the_box_542_fastwam
+  split: val
+  # 显式指定新增的 71 条。写成 range 展开的列表，避免 val_set_proportion 再去随机划分。
+  episodes: [471, 472, 473, 474, 475, 476, 477, 478, 479, 480,
+             481, 482, 483, 484, 485, 486, 487, 488, 489, 490,
+             491, 492, 493, 494, 495, 496, 497, 498, 499, 500,
+             501, 502, 503, 504, 505, 506, 507, 508, 509, 510,
+             511, 512, 513, 514, 515, 516, 517, 518, 519, 520,
+             521, 522, 523, 524, 525, 526, 527, 528, 529, 530,
+             531, 532, 533, 534, 535, 536, 537, 538, 539, 540, 541]
+  # ⚠️ 必须仍用**训练时**那份统计量。换成新数据自己算的会让指标与
+  #    final_A_sweep 不可比，而且部署时用的就是这一份。
+  norm_stats: ./runs/_shared/dataset_stats.json
+
+sampling:
+  # 每个 episode 等间隔取 4 个 -> 71 × 4 = 284 个样本，是 final_A_sweep 的 4.4 倍。
+  # 原验证集 64 样本时成对 Δ 的 95%CI 约 ±0.008，而好的 ckpt 之间只差 0.003~0.006，
+  # 分辨不出来。284 个样本把 CI 收到约 ±0.004，才有可能分出高低。
+  per_episode: 4
+  num_samples: 284          # per_episode 生效时这项只作记录
+  stride: 0
+  seed: 42
+  skip_padded: true
+
+inference:
+  mode: joint
+  num_inference_steps: 10
+  sigma_shift: null
+  save_video: true
+  action_crosscheck: true
+
+annotate:
+  steps_per_epoch: 15538
+  fps: null
+  video_fps: null
+
+runtime:
+  gpus: [0, 1, 2, 3, 4, 5, 6, 7]
+  overrides: []
